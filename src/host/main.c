@@ -2,6 +2,7 @@
 //
 //   dxhost "/path/to/Deus Ex Human Revolution - Directors Cut.app" [args...]
 #include "cpu.h"
+#include "crash.h"
 #include "gmem.h"
 #include "hobj.h"
 #include "log.h"
@@ -130,7 +131,8 @@ static void run_initializers(struct image *img) {
             gaddr_t fn = gread32(s->addr + 4 * j);
             uint32_t args[5] = {runtime_argc(), runtime_argv(), runtime_envp(), runtime_apple(),
                                 runtime_program_vars()};
-            LOGD("  initializer %u/%u at %#x", j + 1, n, fn);
+            char desc[256];
+            LOGD("  initializer %u/%u at %#x %s", j + 1, n, fn, macho_describe_addr(fn, desc, sizeof desc));
             cpu_call(fn, 5, args);
         }
     }
@@ -142,17 +144,29 @@ static int run_test_objects(int n, char **paths) {
     cpu_init();
     hobj_init();
     thunks_init();
+    runtime_preload_guest_libs(loaded, &nloaded);
     struct image *img = macho_load_objects("test", (const char *const *)paths, n, resolve_symbol);
     if (!img) fatal("no objects loaded");
-    loaded[nloaded++] = img;
+    // The test image goes first so that it acts as the main executable.
+    memmove(loaded + 1, loaded, sizeof loaded[0] * (size_t)nloaded);
+    loaded[0] = img;
+    nloaded++;
     macho_register(img);
-    runtime_preload_guest_libs(loaded, &nloaded);
     runtime_images_loaded(loaded, nloaded);
     gaddr_t stack_lo = gmem_map_anywhere(MAIN_STACK_SIZE, GPROT_RW, 0);
     char *targv[] = {paths[0], NULL};
     gaddr_t sp = build_stack(stack_lo + MAIN_STACK_SIZE, 1, targv, paths[0]);
     runtime_set_main_stack(stack_lo, sp);
     cpu_set_thread_stack(stack_lo, sp);
+    const char *describe = getenv("DXH_DESCRIBE"); // debug: "addr,addr,..."
+    if (describe) {
+        char *list = strdup(describe), *tok, *save = NULL;
+        for (tok = strtok_r(list, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+            char buf[256];
+            gaddr_t a = (gaddr_t)strtoul(tok, NULL, 0);
+            LOGE("%#x = %s", a, macho_describe_addr(a, buf, sizeof buf));
+        }
+    }
     for (int i = nloaded - 1; i >= 0; i--) run_initializers(loaded[i]);
     gaddr_t main_fn = macho_export(img, "_main", NULL);
     if (!main_fn) fatal("test objects define no _main");
@@ -163,6 +177,7 @@ static int run_test_objects(int n, char **paths) {
 
 int main(int argc, char **argv) {
     log_init();
+    crash_install();
     if (argc < 2) {
         fprintf(stderr, "usage: %s <Game.app | i386 executable> [args...]\n", argv[0]);
         return 1;

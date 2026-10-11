@@ -5,6 +5,8 @@
 
 void runtime_set_process_args(int argc, gaddr_t argv, gaddr_t envp, gaddr_t apple);
 void runtime_set_main_stack(gaddr_t lo, gaddr_t hi);
+gaddr_t runtime_main_stack_lo(void);
+gaddr_t runtime_main_stack_hi(void);
 uint32_t runtime_argc(void);
 gaddr_t runtime_argv(void);
 gaddr_t runtime_envp(void);

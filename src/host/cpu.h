@@ -37,6 +37,7 @@ void cpu_init(void);
 void cpu_thread_attach(void);
 // Use the given guest memory as the current thread's guest stack.
 void cpu_set_thread_stack(gaddr_t lo, gaddr_t hi);
+void cpu_get_thread_stack(gaddr_t *lo, gaddr_t *hi);
 
 // Call a guest cdecl function with 32-bit stack arguments.
 uint64_t cpu_call(gaddr_t fn, int nargs, const uint32_t *args);

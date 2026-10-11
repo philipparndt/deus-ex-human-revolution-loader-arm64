@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <stdlib.h>
 
 union ldt_entry {
     code_desc_t code;
@@ -74,14 +75,32 @@ int main(void) {
     memcpy(re + 2, &b, 8);
     re[10] = 0x41; re[11] = 0xFF; re[12] = 0xE3; // jmp r11
 
+    uint8_t *gate2 = low + (getenv("SEPARATE") ? 0x8110 : 0x110);
+    uint8_t *farptr2 = low + (getenv("SEPARATE") ? 0x8208 : 0x208);
+    uint8_t *re2 = low + (getenv("SEPARATE") ? 0x8320 : 0x320);
+    gate2[0] = 0xFF; gate2[1] = 0x2D;
+    uint32_t fp2 = (uint32_t)(uintptr_t)farptr2;
+    memcpy(gate2 + 2, &fp2, 4);
+    uint32_t reentry2 = (uint32_t)(uintptr_t)re2;
+    memcpy(farptr2, &reentry2, 4);
+    memcpy(farptr2 + 4, &cs64, 2);
+    memcpy(re2, re, 13);
+
     // 32-bit stack: [ret -> gate][arg]
     uint32_t *sp = (uint32_t *)(low + 0x1F000);
     sp[0] = (uint32_t)(uintptr_t)gate;
     sp[1] = 1000;
 
-    printf("entering 32-bit code...\n");
+    printf("entering 32-bit code repeatedly...\n");
     fflush(stdout);
-    uint32_t r = call32((uint32_t)(uintptr_t)fn, (uint32_t)(uintptr_t)sp, cs32);
-    printf("returned eax=%u (expected 999 if executed in 32-bit mode)\n", r);
-    return r == 999 ? 0 : 2;
+    uint32_t r = 0;
+    for (int i = 0; i < 5; i++) {
+        sp[0] = (uint32_t)(uintptr_t)((i & 1) ? gate2 : gate);
+        sp[1] = 1000 + i;
+        r = call32((uint32_t)(uintptr_t)fn, (uint32_t)(uintptr_t)sp, cs32);
+        printf("call %d returned eax=%u\n", i, r);
+        if (getenv("POKE")) low[0x800] = (uint8_t)i; // write into the page holding gates
+        fflush(stdout);
+    }
+    return 0;
 }

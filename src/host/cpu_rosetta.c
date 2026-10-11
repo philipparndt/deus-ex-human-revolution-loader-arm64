@@ -10,6 +10,8 @@
 #include <pthread.h>
 #include <string.h>
 
+static void make_all_stubs(void);
+
 union ldt_entry {
     code_desc_t code;
     data_desc_t data;
@@ -35,24 +37,19 @@ static gaddr_t gate_page;   // trampolines
 static gaddr_t gate_host32; // 32-bit: far jump to host entry
 static gaddr_t gate_ret32;  // 32-bit: far jump to return path
 
-static gaddr_t stub_chunk;
-static uint32_t stub_used, stub_cap;
-static pthread_mutex_t stub_lock = PTHREAD_MUTEX_INITIALIZER;
 
 #define STUB_SIZE 16
-#define STUB_CHUNK 0x40000
 #define THREAD_GUEST_STACK (1u << 20)
 
 static _Thread_local gaddr_t thread_stack_lo, thread_stack_hi;
 
 static void write_far_gate(gaddr_t gate32, gaddr_t farptr, gaddr_t tramp64, void (*target)(void), uint16_t cs64) {
-    // 32-bit: jmp far [farptr]
-    gwrite8(gate32, 0xFF);
-    gwrite8(gate32 + 1, 0x2D);
-    gwrite32(gate32 + 2, farptr);
-    // m16:32 far pointer to the 64-bit trampoline
-    gwrite32(farptr, tramp64);
-    gwrite16(farptr + 4, cs64);
+    (void)farptr;
+    // 32-bit: jmp far ptr16:32 (direct form; the indirect `jmp far [m16:32]`
+    // is mistranslated by Rosetta when the same gate is taken twice in a row)
+    gwrite8(gate32, 0xEA);
+    gwrite32(gate32 + 1, tramp64);
+    gwrite16(gate32 + 5, cs64);
     // 64-bit: movabs r11, target; jmp r11
     gwrite8(tramp64, 0x49);
     gwrite8(tramp64 + 1, 0xBB);
@@ -83,37 +80,49 @@ void cpu_init(void) {
     uint16_t cs64;
     __asm__ volatile("mov %%cs, %0" : "=r"(cs64));
 
-    gate_page = gmem_map_anywhere(GPAGE_SIZE, GPROT_RWX, 0);
+    // 32-bit gates and 64-bit trampolines live on separate pages: Rosetta
+    // mistranslates mode switches when both kinds of code share a page.
+    gate_page = gmem_map_anywhere(3 * GPAGE_SIZE, GPROT_RWX, 0);
     if (!gate_page) fatal("rosetta: no memory for gates");
     gate_host32 = gate_page;
     gate_ret32 = gate_page + 0x10;
-    write_far_gate(gate_host32, gate_page + 0x40, gate_page + 0x80, rosetta_host_entry, cs64);
-    write_far_gate(gate_ret32, gate_page + 0x48, gate_page + 0xA0, rosetta_return64, cs64);
+    write_far_gate(gate_host32, 0, gate_page + GPAGE_SIZE, rosetta_host_entry, cs64);
+    write_far_gate(gate_ret32, 0, gate_page + 2 * GPAGE_SIZE, rosetta_return64, cs64);
+    make_all_stubs();
     LOGI("rosetta: cs32=%#llx cs64=%#x gates at %#x", rosetta_cs32, cs64, gate_page);
 }
 
-gaddr_t cpu_make_stub(uint32_t id) {
-    pthread_mutex_lock(&stub_lock);
-    if (stub_used + STUB_SIZE > stub_cap) {
-        stub_chunk = gmem_map_anywhere(STUB_CHUNK, GPROT_RWX, 0);
-        if (!stub_chunk) fatal("rosetta: no memory for stubs");
-        stub_used = 0;
-        stub_cap = STUB_CHUNK;
+// All stubs are written once at startup: writing to a page with translated
+// guest code later on breaks Rosetta's mode switching (see macho_obj.c).
+#define MAX_STUBS 65536
+static gaddr_t stub_base;
+
+static void make_all_stubs(void) {
+    stub_base = gmem_map_anywhere(MAX_STUBS * STUB_SIZE, GPROT_RWX, 0);
+    if (!stub_base) fatal("rosetta: no memory for stubs");
+    for (uint32_t id = 0; id < MAX_STUBS; id++) {
+        gaddr_t s = stub_base + id * STUB_SIZE;
+        gwrite8(s, 0xB8); // mov eax, id
+        gwrite32(s + 1, id);
+        gwrite8(s + 5, 0xE9); // jmp rel32 gate_host32
+        gwrite32(s + 6, gate_host32 - (s + 10));
+        gwrite8(s + 10, 0xCC);
     }
-    gaddr_t s = stub_chunk + stub_used;
-    stub_used += STUB_SIZE;
-    pthread_mutex_unlock(&stub_lock);
-    gwrite8(s, 0xB8); // mov eax, id
-    gwrite32(s + 1, id);
-    gwrite8(s + 5, 0xE9); // jmp rel32 gate_host32
-    gwrite32(s + 6, gate_host32 - (s + 10));
-    gwrite8(s + 10, 0xCC);
-    return s;
+}
+
+gaddr_t cpu_make_stub(uint32_t id) {
+    if (id >= MAX_STUBS) fatal("rosetta: too many thunk stubs");
+    return stub_base + id * STUB_SIZE;
 }
 
 void cpu_set_thread_stack(gaddr_t lo, gaddr_t hi) {
     thread_stack_lo = lo;
     thread_stack_hi = hi;
+}
+
+void cpu_get_thread_stack(gaddr_t *lo, gaddr_t *hi) {
+    *lo = thread_stack_lo;
+    *hi = thread_stack_hi;
 }
 
 void cpu_thread_attach(void) {

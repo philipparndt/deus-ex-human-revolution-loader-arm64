@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 
-#define MAX_THUNKS 16384
+#define MAX_THUNKS 65536
 
 static struct {
     const char *name;

@@ -300,13 +300,22 @@ struct image *macho_load_objects(const char *name, const char *const *paths, int
         }
     }
 
+    // Code and read-only sections first, then writable data on separate pages.
+    // Rosetta mistranslates later mode switches once guest code writes to a page
+    // that holds translated code, so the two must never share a page.
     uint32_t total = 0;
-    for (int g = 0; g < ngroups; g++) {
-        uint32_t a = groups[g].align ? groups[g].align : 1;
-        if (a < 16) a = 16;
-        total = (total + a - 1) & ~(a - 1);
-        groups[g].addr = total;
-        total += groups[g].size;
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1) total = (total + GPAGE_SIZE - 1) & ~(GPAGE_SIZE - 1);
+        for (int g = 0; g < ngroups; g++) {
+            bool code = strcmp(groups[g].seg, "__TEXT") == 0 ||
+                        (groups[g].flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS));
+            if (code != (pass == 0)) continue;
+            uint32_t a = groups[g].align ? groups[g].align : 1;
+            if (a < 16) a = 16;
+            total = (total + a - 1) & ~(a - 1);
+            groups[g].addr = total;
+            total += groups[g].size;
+        }
     }
     uint32_t common_off = (total + 15) & ~15u;
     total = common_off + common_size;
@@ -323,6 +332,14 @@ struct image *macho_load_objects(const char *name, const char *const *paths, int
                 memcpy(g2h(s->new_addr), objs[k].data + s->hdr->offset, s->hdr->size);
         }
     }
+
+    // The image's mach header (ld normally synthesises ___dso_handle pointing at it).
+    gaddr_t hdr = gheap_calloc(1, sizeof(struct mach_header));
+    struct mach_header *mh = g2h(hdr);
+    mh->magic = MH_MAGIC;
+    mh->cputype = CPU_TYPE_I386;
+    mh->cpusubtype = CPU_SUBTYPE_I386_ALL;
+    mh->filetype = MH_DYLIB;
 
     // Resolve every symbol's address.
     unsigned unresolved = 0;
@@ -345,7 +362,9 @@ struct image *macho_load_objects(const char *name, const char *const *paths, int
                 o->sym_addr[i] = s->n_value;
             } else if (t == N_UNDF) {
                 uint64_t coff;
-                if (strmap_get(&commons, nm, &coff)) {
+                if (strcmp(nm, "___dso_handle") == 0) {
+                    o->sym_addr[i] = hdr;
+                } else if (strmap_get(&commons, nm, &coff)) {
                     o->sym_addr[i] = base + common_off + (uint32_t)coff;
                 } else {
                     gaddr_t a = resolve ? resolve(nm, name, (s->n_desc & N_WEAK_REF) != 0) : 0;
@@ -447,12 +466,6 @@ struct image *macho_load_objects(const char *name, const char *const *paths, int
     img->syms = syms;
     img->nsyms = (uint32_t)si;
     img->strtab = strtab;
-    gaddr_t hdr = gheap_calloc(1, sizeof(struct mach_header));
-    struct mach_header *mh = g2h(hdr);
-    mh->magic = MH_MAGIC;
-    mh->cputype = CPU_TYPE_I386;
-    mh->cpusubtype = CPU_SUBTYPE_I386_ALL;
-    mh->filetype = MH_DYLIB;
     img->header = hdr;
 
     LOGI("obj: linked %s from %d objects at %#x-%#x (%u unresolved)", name, nobjs, img->lo, img->hi, unresolved);
