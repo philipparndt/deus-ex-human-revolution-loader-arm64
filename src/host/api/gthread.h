@@ -14,8 +14,13 @@ struct gthread {
     bool own_stack, detached, started, finished;
     gaddr_t start, arg;
     uint32_t retval;
-    uint32_t tls[512];
+    uint32_t *tls; // GTHREAD_TLS_SLOTS words in guest memory at handle + GTHREAD_TLS_OFFSET
 };
+
+// Guest-visible thread block (the pthread_t handle): magic, host pointer, then
+// the TLS slots, so guest code (src/guest/libfast) can read them directly.
+#define GTHREAD_TLS_OFFSET 64
+#define GTHREAD_TLS_SLOTS 512
 
 // Record for the calling host thread (created on demand for threads the guest
 // did not create, e.g. the main thread or dispatch worker threads).

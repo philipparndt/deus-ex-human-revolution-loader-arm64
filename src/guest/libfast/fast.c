@@ -119,3 +119,35 @@ EXPORT int64_t __moddi3(int64_t n, int64_t d) {
     udivmod64(un, ud, &r);
     return n < 0 ? -(int64_t)r : (int64_t)r;
 }
+
+// pthread_self / thread-specific data without a host call: the host keeps a
+// table mapping each 16 KB guest stack page to the owning thread's block (the
+// guest pthread_t), whose TLS slots start at offset 64 (src/host/api/gthread.h).
+// Unknown stacks fall back to the host.
+extern uint32_t *dx_stack_threads;
+extern uint32_t dx_pthread_self(void);
+
+static inline uint32_t cur_thread(void) {
+    uint32_t esp;
+    __asm__("movl %%esp, %0" : "=r"(esp));
+    uint32_t t = dx_stack_threads[esp >> 14];
+    return t ? t : dx_pthread_self();
+}
+
+#define TLS_OFFSET 64
+#define TLS_SLOTS 512
+
+EXPORT uint32_t pthread_self(void) { return cur_thread(); }
+
+EXPORT void *pthread_getspecific(uint32_t key) {
+    if (key >= TLS_SLOTS) return 0;
+    return ((void **)(uintptr_t)(cur_thread() + TLS_OFFSET))[key];
+}
+
+EXPORT int pthread_setspecific(uint32_t key, const void *value) {
+    if (key >= TLS_SLOTS) return 22; // EINVAL
+    ((const void **)(uintptr_t)(cur_thread() + TLS_OFFSET))[key] = value;
+    return 0;
+}
+
+EXPORT int pthread_equal(uint32_t a, uint32_t b) { return a == b; }

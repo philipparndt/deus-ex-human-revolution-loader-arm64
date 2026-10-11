@@ -41,7 +41,7 @@ static void store_hptr(gaddr_t g, void *p) { memcpy(g2h(g), &p, sizeof p); }
 
 // --- threads --------------------------------------------------------------------
 
-#define MAX_KEYS 512
+#define MAX_KEYS GTHREAD_TLS_SLOTS
 static struct {
     bool used;
     gaddr_t destructor;
@@ -50,11 +50,35 @@ static pthread_mutex_t keys_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static _Thread_local struct gthread *cur;
 
+// Stack page -> thread block table for guest-side pthread_self/getspecific
+// (libfast): entry (esp >> 14) is the handle of the thread owning that stack
+// page, 0 if unknown (the guest then falls back to the host thunks).
+#define STACK_TABLE_SHIFT 14
+static gaddr_t stack_table;
+static void make_stack_table(void) {
+    stack_table = gmem_map_anywhere((1ull << 32) >> STACK_TABLE_SHIFT << 2, GPROT_RW, 0);
+    if (!stack_table) fatal("pthread: no guest memory for the stack table");
+}
+static gaddr_t ensure_stack_table(void) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, make_stack_table);
+    return stack_table;
+}
+static void init_stack_table(gaddr_t a) { gwrite32(a, ensure_stack_table()); }
+GDATA(dx_stack_threads, 4, init_stack_table);
+
+static void stack_table_set(gaddr_t lo, gaddr_t hi, gaddr_t handle) {
+    if (!ensure_stack_table() || hi <= lo) return;
+    for (uint64_t p = lo >> STACK_TABLE_SHIFT; p <= (uint64_t)(hi - 1) >> STACK_TABLE_SHIFT; p++)
+        gwrite32(stack_table + 4 * (gaddr_t)p, handle);
+}
+
 static struct gthread *gthread_alloc(void) {
     struct gthread *t = calloc(1, sizeof *t);
-    t->handle = gheap_calloc(1, 64);
+    t->handle = gheap_calloc(1, GTHREAD_TLS_OFFSET + 4 * GTHREAD_TLS_SLOTS);
     gwrite32(t->handle, GTHREAD_MAGIC);
     store_hptr(t->handle + 8, t);
+    t->tls = g2h(t->handle + GTHREAD_TLS_OFFSET);
     return t;
 }
 
@@ -70,6 +94,7 @@ struct gthread *gthread_current(void) {
         cpu_thread_attach();
         cpu_get_thread_stack(&t->stack_lo, &t->stack_hi);
     }
+    stack_table_set(t->stack_lo, t->stack_hi, t->handle);
     cur = t;
     return t;
 }
@@ -97,6 +122,7 @@ static void *thread_main(void *arg) {
     struct gthread *t = arg;
     cur = t;
     cpu_set_thread_stack(t->stack_lo, t->stack_hi);
+    stack_table_set(t->stack_lo, t->stack_hi, t->handle);
     uint32_t ret = gcall1(t->start, t->arg);
     gthread_exit_current(ret);
 }
@@ -105,6 +131,7 @@ _Noreturn void gthread_exit_current(uint32_t ret) {
     struct gthread *t = gthread_current();
     t->retval = ret;
     run_tls_destructors(t);
+    stack_table_set(t->stack_lo, t->stack_hi, 0);
     t->finished = true;
     pthread_exit(NULL);
 }
@@ -142,6 +169,8 @@ THUNK(pthread_create) {
 }
 
 THUNK(pthread_self) { RET(gthread_current()->handle); }
+// Fallbacks for libfast's guest-side versions (which shadow the names above).
+THUNK(dx_pthread_self) { RET(gthread_current()->handle); }
 THUNK(pthread_equal) { RET(ARG(0) == ARG(1)); }
 THUNK(pthread_main_np) { RET(pthread_main_np()); }
 THUNK(pthread_exit) { gthread_exit_current(ARG(0)); }
