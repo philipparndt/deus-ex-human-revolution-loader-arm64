@@ -91,3 +91,24 @@ __attribute__((constructor)) static void install_block_hooks(void) {
     block_objc_retain = blk_retain;
     block_objc_release = blk_release;
 }
+
+// The process's main bundle must be the game's .app (Info.plist, resources,
+// data paths next to the bundle), not dxhost's. Guest code reaches NSBundle
+// through the bridge, and AppKit itself also asks +mainBundle.
+#include "cf_bridge.h"
+static NSBundle *game_bundle;
+static NSBundle *dx_main_bundle(id self, SEL _cmd) {
+    (void)self, (void)_cmd;
+    return game_bundle;
+}
+void objc_install_main_bundle(void) {
+    CFBundleRef b = cf_main_bundle();
+    if (!b) return;
+    CFURLRef url = CFBundleCopyBundleURL(b);
+    game_bundle = [[NSBundle bundleWithURL:(__bridge NSURL *)url] retain];
+    CFRelease(url);
+    if (!game_bundle) return;
+    Method m = class_getClassMethod([NSBundle class], @selector(mainBundle));
+    method_setImplementation(m, (IMP)dx_main_bundle);
+    LOGI("objc: main bundle is %s", game_bundle.bundlePath.UTF8String);
+}

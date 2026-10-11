@@ -11,6 +11,7 @@
 #include "thunk.h"
 
 void objc_bridge_register_images(void);
+void objc_install_main_bundle(void);
 
 #include <libgen.h>
 #include <limits.h>
@@ -209,6 +210,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < nloaded; i++) macho_link(loaded[i], resolve_symbol);
     runtime_images_loaded(loaded, nloaded);
     objc_bridge_register_images();
+    objc_install_main_bundle();
 
     gaddr_t stack_lo = gmem_map_anywhere(MAIN_STACK_SIZE, GPROT_RW, 0);
     if (!stack_lo) fatal("no memory for the main stack");
