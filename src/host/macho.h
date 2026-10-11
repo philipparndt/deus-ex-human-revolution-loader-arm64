@@ -31,6 +31,10 @@ struct image {
 
     struct image_segment segs[16];
     int nsegs;
+    // Load-command segment index (as used by dyld rebase/bind opcodes, counting
+    // __PAGEZERO) -> segs[] index, or -1 for unmapped segments.
+    int seg_by_file_index[16];
+    int nfile_segs;
     struct image_section *sects;
     int nsects;
 

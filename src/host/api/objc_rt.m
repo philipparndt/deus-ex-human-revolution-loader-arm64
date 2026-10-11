@@ -162,6 +162,7 @@ static Class host_class_named(const char *name) {
 }
 
 static void register_class(gaddr_t cls) {
+    LOGT("objc: class struct at %#x name ptr %#x", cls, gread32(cls + GCLS_NAME));
     gaddr_t meta = gread32(cls + GCLS_ISA);
     const char *name = g2h(gread32(cls + GCLS_NAME));
     struct gclass *c = calloc(1, sizeof *c);
@@ -258,6 +259,7 @@ static void register_image(struct image *img) {
     int ncats = 0;
     for (uint32_t off = 0; off + 16 <= mod->size; off += 16) {
         gaddr_t symtab = gread32(mod->addr + off + 12);
+        LOGT("objc: module +%#x symtab %#x", off, symtab);
         if (!symtab) continue;
         uint16_t ncls = gread16(symtab + 8), ncat = gread16(symtab + 10);
         for (uint16_t i = 0; i < ncls; i++) register_class(gread32(symtab + 12 + 4 * i));

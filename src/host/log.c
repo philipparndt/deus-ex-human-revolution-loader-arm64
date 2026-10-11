@@ -2,6 +2,7 @@
 
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <time.h>
 
 int log_level = 1;
@@ -22,13 +23,14 @@ static void vlog(int level, const char *fmt, va_list ap) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t tid;
     pthread_threadid_np(NULL, &tid);
-    pthread_mutex_lock(&log_lock);
+    // Signal handlers may log while this thread already holds the lock.
+    bool locked = level != 0 ? (pthread_mutex_lock(&log_lock), true) : pthread_mutex_trylock(&log_lock) == 0;
     fprintf(log_file ? log_file : stderr, "[%5ld.%03ld %c %5llu] ", (long)ts.tv_sec % 100000,
             ts.tv_nsec / 1000000, tags[level & 3], (unsigned long long)tid);
     vfprintf(log_file ? log_file : stderr, fmt, ap);
     fputc('\n', log_file ? log_file : stderr);
     fflush(log_file ? log_file : stderr);
-    pthread_mutex_unlock(&log_lock);
+    if (locked) pthread_mutex_unlock(&log_lock);
 }
 
 void log_write(int level, const char *fmt, ...) {

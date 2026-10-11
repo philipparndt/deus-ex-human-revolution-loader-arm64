@@ -180,7 +180,7 @@ static int run_test_objects(int n, char **paths) {
 
 int main(int argc, char **argv) {
     log_init();
-    crash_install();
+    if (!getenv("DXH_NO_CRASH_HANDLER")) crash_install();
     if (argc < 2) {
         fprintf(stderr, "usage: %s <Game.app | i386 executable> [args...]\n", argv[0]);
         return 1;

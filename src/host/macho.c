@@ -96,8 +96,12 @@ struct image *macho_load(const char *path) {
         switch (cmd->cmd) {
         case LC_SEGMENT: {
             const struct segment_command *sc = (const struct segment_command *)cmd;
+            if (img->nfile_segs == 16) fatal("macho: too many segments");
+            int fidx = img->nfile_segs++;
+            img->seg_by_file_index[fidx] = -1;
             if (sc->vmsize == 0 || (sc->initprot == 0 && sc->filesize == 0 && sc->vmaddr == 0)) break; // __PAGEZERO
             if (img->nsegs == 16) fatal("macho: too many segments");
+            img->seg_by_file_index[fidx] = img->nsegs;
             struct image_segment *s = &img->segs[img->nsegs++];
             memcpy(s->name, sc->segname, 16);
             s->addr = sc->vmaddr;
@@ -309,6 +313,13 @@ static int64_t read_sleb(const uint8_t **p, const uint8_t *end) {
     return r;
 }
 
+// Address of a segment by its load-command index (dyld opcode numbering).
+static gaddr_t seg_addr(const struct image *img, int file_index) {
+    if (file_index < 0 || file_index >= img->nfile_segs || img->seg_by_file_index[file_index] < 0)
+        fatal("macho: opcode references unmapped segment %d in %s", file_index, img->path);
+    return img->segs[img->seg_by_file_index[file_index]].addr;
+}
+
 static void do_rebase_ops(struct image *img) {
     const struct dyld_info_command *di = img->dyld_info;
     const uint8_t *p = img->file + di->rebase_off, *end = p + di->rebase_size;
@@ -322,7 +333,7 @@ static void do_rebase_ops(struct image *img) {
         case REBASE_OPCODE_DONE: p = end; break;
         case REBASE_OPCODE_SET_TYPE_IMM: type = imm; break;
         case REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB:
-            addr = img->segs[imm].addr + (uint32_t)read_uleb(&p, end);
+            addr = seg_addr(img, imm) + (uint32_t)read_uleb(&p, end);
             break;
         case REBASE_OPCODE_ADD_ADDR_ULEB: addr += (uint32_t)read_uleb(&p, end); break;
         case REBASE_OPCODE_ADD_ADDR_IMM_SCALED: addr += imm * 4; break;
@@ -405,7 +416,7 @@ static void do_bind_ops(struct image *img, symbol_resolver resolve, uint32_t off
             break;
         case BIND_OPCODE_SET_TYPE_IMM: type = imm; break;
         case BIND_OPCODE_SET_ADDEND_SLEB: addend = read_sleb(&p, end); break;
-        case BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB: addr = img->segs[imm].addr + (uint32_t)read_uleb(&p, end); break;
+        case BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB: addr = seg_addr(img, imm) + (uint32_t)read_uleb(&p, end); break;
         case BIND_OPCODE_ADD_ADDR_ULEB: addr += (uint32_t)read_uleb(&p, end); break;
         case BIND_OPCODE_DO_BIND:
         case BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB:
@@ -456,7 +467,7 @@ static void do_weak_bind_ops(struct image *img, symbol_resolver resolve) {
             break;
         case BIND_OPCODE_SET_TYPE_IMM: type = imm; break;
         case BIND_OPCODE_SET_ADDEND_SLEB: addend = read_sleb(&p, end); break;
-        case BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB: addr = img->segs[imm].addr + (uint32_t)read_uleb(&p, end); break;
+        case BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB: addr = seg_addr(img, imm) + (uint32_t)read_uleb(&p, end); break;
         case BIND_OPCODE_ADD_ADDR_ULEB: addr += (uint32_t)read_uleb(&p, end); break;
         case BIND_OPCODE_DO_BIND:
         case BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB:
