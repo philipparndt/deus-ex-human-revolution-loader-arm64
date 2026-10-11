@@ -23,6 +23,13 @@ static void describe(const char *what, uint64_t a) {
 
 static bool readable(gaddr_t a) { return gmem_is_mapped(a & ~3u, 4); }
 
+static void dump_code(gaddr_t eip) {
+    if (!gmem_is_mapped(eip, 16)) return;
+    char hex[64] = {0};
+    for (int i = 0; i < 16; i++) snprintf(hex + 3 * i, 4, "%02x ", gread8(eip + (uint32_t)i));
+    LOGE("  code at %#x: %s", eip, hex);
+}
+
 static void guest_backtrace(uint32_t esp, uint32_t ebp) {
     char buf[256];
     if (readable(esp) && readable(esp + 60)) {
@@ -57,6 +64,7 @@ static void handler(int sig, siginfo_t *si, void *uctx) {
     ucontext_t *uc = uctx;
     _STRUCT_X86_THREAD_STATE64 *ss = &uc->uc_mcontext->__ss;
     describe("rip", ss->__rip);
+    if (ss->__rip < 0x100000000ULL) dump_code((gaddr_t)ss->__rip);
     describe("fault", (uint64_t)si->si_addr);
     LOGE("  eax=%08llx ebx=%08llx ecx=%08llx edx=%08llx", ss->__rax & 0xffffffff, ss->__rbx & 0xffffffff,
          ss->__rcx & 0xffffffff, ss->__rdx & 0xffffffff);
@@ -71,6 +79,7 @@ static void handler(int sig, siginfo_t *si, void *uctx) {
     uint32_t eip, esp, ebp, gr[8];
     if (cpu_crash_regs(&eip, &esp, &ebp, gr)) {
         describe("eip*", eip);
+        dump_code(eip);
         LOGE("  (eip* = start of the current translated block; registers may lag)");
         LOGE("  eax=%08x ecx=%08x edx=%08x ebx=%08x esp=%08x ebp=%08x esi=%08x edi=%08x", gr[0], gr[1], gr[2], gr[3],
              gr[4], gr[5], gr[6], gr[7]);

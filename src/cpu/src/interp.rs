@@ -77,6 +77,8 @@ impl Engine {
 
     /// Run until eip == stop, eip enters the stub range, or an exit occurs.
     pub fn run(&mut self, st: &mut CpuState, stop: u32) -> Exit {
+        let watch = watch_addr();
+        let mut watched = if watch != 0 { mem::r32(watch) } else { 0 };
         loop {
             let eip = st.eip;
             if eip == stop {
@@ -88,7 +90,27 @@ impl Engine {
             let b = self.block(eip);
             for insn in b.insns.iter() {
                 st.icount += 1;
-                match exec(self, st, insn) {
+                let r = exec(self, st, insn);
+                if watch != 0 && mem::r32(watch) != watched {
+                    eprintln!(
+                        "dxcpu watch: [{:#x}] {:#010x} -> {:#010x} by instruction at {:#x} (esp={:#x} eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esi={:#x} edi={:#x})",
+                        watch, watched, mem::r32(watch), insn.ip32(), st.gpr[ESP], st.gpr[EAX], st.gpr[ECX], st.gpr[EDX], st.gpr[EBX], st.gpr[ESI], st.gpr[EDI]
+                    );
+                    let sp = st.gpr[ESP];
+                    eprintln!("dxcpu watch: stack {:08x?}", (0..12).map(|i| mem::r32(sp.wrapping_add(4 * i))).collect::<Vec<_>>());
+                    let mut bp = st.gpr[EBP];
+                    let mut chain = Vec::new();
+                    for _ in 0..24 {
+                        if bp < sp || bp == 0 || bp > sp.wrapping_add(0x10_0000) {
+                            break;
+                        }
+                        chain.push(format!("{:#x}@{:#x}", mem::r32(bp + 4), bp));
+                        bp = mem::r32(bp);
+                    }
+                    eprintln!("dxcpu watch: frames {}", chain.join(" <- "));
+                    watched = mem::r32(watch);
+                }
+                match r {
                     Ok(Step::Next) => {
                         st.eip = insn.next_ip32();
                         if st.eip == stop {
@@ -106,6 +128,18 @@ impl Engine {
             }
         }
     }
+}
+
+/// Debug watchpoint (DXCPU_WATCH=0xaddr): report guest instructions that change
+/// the 32-bit word at that address.
+fn watch_addr() -> u32 {
+    static W: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *W.get_or_init(|| {
+        std::env::var("DXCPU_WATCH")
+            .ok()
+            .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0)
+    })
 }
 
 // --- registers and operands ------------------------------------------------------------

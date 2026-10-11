@@ -227,7 +227,9 @@ gaddr_t gheap_alloc(uint32_t size) {
     gaddr_t p = free_list[c];
     free_list[c] = gread32(p);
     pthread_mutex_unlock(&heap_lock);
-    gwrite32(p, 0);
+    // Recycled blocks are zeroed: freshly allocated memory on macOS is
+    // almost always zero, and some game code (accidentally) depends on it.
+    memset(g2h(p), 0, class_sizes[c]);
     return p;
 }
 

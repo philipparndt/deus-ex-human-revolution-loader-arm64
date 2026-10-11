@@ -2,6 +2,28 @@
 //!
 //! Hot integer instructions are translated natively; everything else runs
 //! through the interpreter one instruction at a time (`helper_interp`).
+//!
+//! SSE/SSE2/SSE3 (see `Translator::sse`): guest xmm0-7 are cached in v16-v23
+//! within a block (loaded on first use from CpuState.xmm through x13, written
+//! back when dirty at exits and before hot-path helper calls; blocks that
+//! branch to their own start keep the cache across the back edge). Results are
+//! bit-exact with the interpreter:
+//! * Float arithmetic (add/sub/mul/div/sqrt) differs from x86 only when the
+//!   result is NaN (operand NaN selection, default NaN sign). Results are
+//!   checked once per segment of xmm-only instructions (`Seg`); if any lane is
+//!   NaN, a cold path restores the xmm state from before the segment and
+//!   re-executes it in the interpreter.
+//! * min/max use fcmgt + bit select (x86 returns the second operand on NaN or
+//!   equality), cmpps & co map to fcmeq/fcmge/fcmgt (+not), float->int
+//!   conversions fix up NaN/out-of-range lanes to 0x80000000, comiss/ucomiss
+//!   leave the FCMP result in NZCV (lazy kind K_FCMP, mapped to ZF/PF/CF).
+//! * Float translation assumes MXCSR control bits 0x1f80 (round to nearest, no
+//!   FTZ/DAZ, exceptions masked) and the host's default FPCR. JitEngine keeps a
+//!   second code cache for other MXCSR values in which SSE float instructions
+//!   go to the interpreter (data movement, logic, shuffles and integer SIMD
+//!   stay native); ldmxcsr/fxrstor end their block so that the mode is
+//!   re-evaluated. MXCSR exception flags (bits 0-5) are only accumulated by
+//!   interpreted instructions (translated code does not set them).
 
 use crate::a64::*;
 use crate::codebuf::CodeBuf;
@@ -27,6 +49,20 @@ const FA: u32 = 9;
 const FB: u32 = 10;
 const FR: u32 = 11;
 const FC: u32 = 12; // carry in for inc/dec
+// SSE translation (see `sse` below).
+const XB: u32 = 13; // &state.xmm[0] (valid while `xbase` is set)
+const NZ: u32 = 15; // saved NZCV around NZCV-clobbering SSE sequences
+const VX: u32 = 16; // guest xmm i is cached in v(16 + i)
+const V0: u32 = 0; // vector temporaries
+const V1: u32 = 1;
+const V2: u32 = 2;
+const ACC: u32 = 3; // segment NaN-check accumulator
+const V4: u32 = 4;
+const V5: u32 = 5;
+const V6: u32 = 6;
+const SAVE: u32 = 24; // v24 + i: pre-segment value of guest xmm i
+const XMM_OFF: u32 = std::mem::offset_of!(CpuState, xmm) as u32;
+const MXCSR_OFF: u32 = std::mem::offset_of!(CpuState, mxcsr) as u32;
 
 pub const K_MAT: u32 = 0;
 pub const K_ADD: u32 = 1;
@@ -34,6 +70,9 @@ pub const K_SUB: u32 = 2;
 pub const K_LOGIC: u32 = 3;
 pub const K_INC: u32 = 4;
 pub const K_DEC: u32 = 5;
+/// Translator-internal: host NZCV holds the result of an FCMP (ucomiss & co).
+/// Never stored in JitCtx (materialised to EFLAGS on flush).
+const K_FCMP: u32 = 6;
 
 /// Context shared with translated code; offsets are hard-coded below.
 #[repr(C)]
@@ -66,8 +105,8 @@ const OFF_FRES: u32 = 56;
 const OFF_FCF: u32 = 60;
 const OFF_BASE: u32 = 64;
 const OFF_HELPER_INTERP: u32 = 72;
-const OFF_HELPER_FLAGS: u32 = 80;
 const OFF_HELPER_COND: u32 = 88;
+const OFF_STATE: u32 = 96;
 
 impl JitCtx {
     pub fn new(state: *mut CpuState, engine: *mut Engine) -> Self {
@@ -178,12 +217,19 @@ pub struct Jit {
     pub stub_lo: u32,
     pub stub_hi: u32,
     pub translated: u64,
+    /// Translate SSE floating point natively (only valid while MXCSR has the
+    /// default control bits 0x1f80; see JitEngine::run).
+    fp_ok: bool,
 }
 
 const BUF_SIZE: usize = 64 << 20;
 
 impl Jit {
     pub fn new(stub_lo: u32, stub_hi: u32) -> Self {
+        Self::with_mode(stub_lo, stub_hi, true)
+    }
+
+    pub fn with_mode(stub_lo: u32, stub_hi: u32, fp_ok: bool) -> Self {
         let mut buf = CodeBuf::new(BUF_SIZE);
         let mut a = Asm::new();
         // enter(ctx, code)
@@ -223,6 +269,7 @@ impl Jit {
             stub_lo,
             stub_hi,
             translated: 0,
+            fp_ok,
         }
     }
 
@@ -255,12 +302,29 @@ impl Jit {
     fn translate(&mut self, eip: u32) -> *const u8 {
         if self.buf.remaining() < 1 << 20 {
             // Out of code space: start over (all chains are dropped with the blocks).
-            let (lo, hi) = (self.stub_lo, self.stub_hi);
-            *self = Jit::new(lo, hi);
+            let (lo, hi, fp) = (self.stub_lo, self.stub_hi, self.fp_ok);
+            *self = Jit::with_mode(lo, hi, fp);
         }
         let insns = self.decode(eip);
         let start = self.buf.next_addr();
-        let mut t = Translator::new(start, self.exit_addr);
+        let mut t = Translator::new(start, self.exit_addr, self.fp_ok);
+        let self_loop = insns.last().is_some_and(|l| {
+            matches!(l.flow_control(), FlowControl::ConditionalBranch | FlowControl::UnconditionalBranch)
+                && l.op0_kind() == OpKind::NearBranch32
+                && l.near_branch32() == eip
+        });
+        let mut loop_regs = 0u8;
+        if self_loop {
+            for insn in &insns {
+                for i in 0..insn.op_count() {
+                    if insn.op_kind(i) == OpKind::Register && insn.op_register(i).is_xmm() {
+                        loop_regs |= 1 << xidx(insn.op_register(i));
+                    }
+                }
+            }
+        }
+        let loop_cf = self_loop && insns.iter().any(|i| matches!(i.mnemonic(), Mnemonic::Inc | Mnemonic::Dec));
+        t.begin(eip, loop_regs, loop_cf);
         for (i, insn) in insns.iter().enumerate() {
             let live = flags_live_after(&insns, i);
             let cont = t.insn(insn, live);
@@ -268,10 +332,22 @@ impl Jit {
                 break;
             }
             if i + 1 == insns.len() {
+                t.seg_end();
                 t.exit_direct_flags(insn.next_ip32());
             }
         }
+        t.finish();
         let code = std::mem::take(&mut t.a.code);
+        if let Some(path) = std::env::var_os("DXCPU_JITDUMP") {
+            // Debugging aid: append the block as assembler source (.long words).
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(f, "_b{:08x}: // {} guest insns", eip, insns.len());
+                for w in &code {
+                    let _ = writeln!(f, "  .long {:#010x}", w);
+                }
+            }
+        }
         let p = self.buf.add(&code).expect("jit buffer");
         debug_assert_eq!(p as usize, start);
         self.keep.extend(t.keep.drain(..));
@@ -385,6 +461,43 @@ struct FlagSrc {
     size: u32,
 }
 
+/// Out-of-line slow path, emitted after the block body (see `finish`).
+#[derive(Clone)]
+enum ColdKind {
+    /// Re-run a segment of instructions (boxed, pointers) with the interpreter.
+    Interp(Vec<u64>),
+    /// Evaluate the x86 condition (Mnemonic of a jcc) with helper_cond; result -> NZCV (Ne = true).
+    Cond(u32),
+}
+
+#[derive(Clone)]
+struct Cold {
+    fix: Fixup,
+    kind: ColdKind,
+    /// Cached xmm registers to write back before the helper call.
+    dirty: u8,
+    /// xmm registers to write back from their segment save slot (v24 + i).
+    saved: u8,
+    /// Cached xmm registers to reload before resuming.
+    valid: u8,
+    resume: usize,
+}
+
+/// A run of native SSE instructions that only write xmm registers. Float
+/// results are checked for NaN once at the end (ACC accumulates the per-lane
+/// "not NaN" masks); on failure the cold path restores the xmm state from
+/// before the segment and re-executes it with the interpreter (x86 NaN
+/// propagation and default NaN differ from ARM; non-NaN results are identical).
+struct Seg {
+    insns: Vec<u64>,
+    /// xmm registers modified in the segment.
+    modified: u8,
+    /// Modified registers that were dirty before: their old value is in v24 + i.
+    saved: u8,
+    /// ACC holds at least one mask.
+    checked: bool,
+}
+
 struct Translator {
     a: Asm,
     start: usize,
@@ -396,6 +509,25 @@ struct Translator {
     nzcv: Option<FlagSrc>,
     /// The lazy descriptor in registers must be stored to ctx at exits.
     dirty: bool,
+    /// SSE floating point may be translated (MXCSR control bits are the default).
+    fp_ok: bool,
+    /// Guest xmm registers cached in v16..v23 (bit i = xmm i), and those modified
+    /// since loading (must be written back to CpuState.xmm before helper calls/exits).
+    xvalid: u8,
+    xdirty: u8,
+    /// XB holds &state.xmm. Invariant: xvalid != 0 implies xbase.
+    xbase: bool,
+    cold: Vec<Cold>,
+    seg: Option<Seg>,
+    consts: Vec<(Fixup, u128)>,
+    /// Register FC holds the current CF (valid while no flag-modifying instruction
+    /// or hot-path helper call happened; only consulted when `nzcv` is None).
+    fc_cf: bool,
+    /// Guest address of the block.
+    block_eip: u32,
+    /// Self-looping block: (code position after the prologue, xmm registers kept
+    /// cached across the back edge).
+    loop_head: Option<(usize, u8)>,
 }
 
 /// Host register holding the 32-bit guest register that contains `r`
@@ -410,8 +542,255 @@ fn is_high8(r: Register) -> bool {
 }
 
 impl Translator {
-    fn new(start: usize, exit_addr: usize) -> Self {
-        Translator { a: Asm::new(), start, exit_addr, exits: Vec::new(), keep: Vec::new(), nzcv: None, dirty: false }
+    fn new(start: usize, exit_addr: usize, fp_ok: bool) -> Self {
+        Translator {
+            a: Asm::new(),
+            start,
+            exit_addr,
+            exits: Vec::new(),
+            keep: Vec::new(),
+            nzcv: None,
+            dirty: false,
+            fp_ok,
+            xvalid: 0,
+            xdirty: 0,
+            xbase: false,
+            cold: Vec::new(),
+            seg: None,
+            consts: Vec::new(),
+            fc_cf: false,
+            block_eip: 0,
+            loop_head: None,
+        }
+    }
+
+    /// Start of the block. For a block that branches back to its own start, the
+    /// xmm registers it uses (`loop_regs`) are loaded once in a prologue and stay
+    /// cached across the back edge (treated as dirty so that exits write them back).
+    fn begin(&mut self, eip: u32, loop_regs: u8, self_loop_cf: bool) {
+        self.block_eip = eip;
+        if loop_regs != 0 {
+            for i in 0..8u32 {
+                if loop_regs & (1 << i) != 0 {
+                    self.xget(i);
+                }
+            }
+            self.xdirty = loop_regs;
+        }
+        if loop_regs != 0 || self_loop_cf {
+            // inc/dec in the loop preserve CF: keep it in FC across the back edge
+            self.load_cf_from_ctx();
+            self.fc_cf = true;
+            self.loop_head = Some((self.a.pos(), loop_regs));
+        }
+    }
+
+    /// FC = CF from the flags stored in ctx (materialised EFLAGS or lazy descriptor).
+    fn load_cf_from_ctx(&mut self) {
+        self.a.ldr_imm(2, T0, CTX, OFF_FKIND);
+        self.a.ldr_imm(2, T1, CTX, OFF_EFLAGS);
+        self.a.ldr_imm(2, FC, CTX, OFF_FCF);
+        self.a.cmp_w(T0, XZR);
+        self.a.csel_w(FC, T1, FC, Cond::Eq);
+        self.a.ubfx_w(FC, FC, 0, 1);
+    }
+
+    // --- xmm register cache --------------------------------------------------------------------
+
+    fn ensure_xbase(&mut self) {
+        if !self.xbase {
+            self.a.ldr_imm(3, XB, CTX, OFF_STATE);
+            self.a.add_x_imm(XB, XB, XMM_OFF);
+            self.xbase = true;
+        }
+    }
+
+    /// Host vector register holding guest xmm i (loaded if needed).
+    fn xget(&mut self, i: u32) -> u32 {
+        if self.xvalid & (1 << i) == 0 {
+            self.ensure_xbase();
+            self.a.ldr_q_imm(VX + i, XB, 16 * i);
+            self.xvalid |= 1 << i;
+        }
+        VX + i
+    }
+
+    /// Like xget, for an instruction that modifies the register.
+    fn xmod(&mut self, i: u32) -> u32 {
+        let r = self.xget(i);
+        self.seg_premod(i);
+        self.xdirty |= 1 << i;
+        r
+    }
+
+    /// Host register for guest xmm i that is about to be completely overwritten.
+    fn xdef(&mut self, i: u32) -> u32 {
+        self.ensure_xbase();
+        self.seg_premod(i);
+        self.xvalid |= 1 << i;
+        self.xdirty |= 1 << i;
+        VX + i
+    }
+
+    fn xmm_store(&mut self, mask: u8) {
+        for i in 0..8u32 {
+            if mask & (1 << i) != 0 {
+                self.a.str_q_imm(VX + i, XB, 16 * i);
+            }
+        }
+    }
+
+    /// Write modified xmm registers back to CpuState (state unchanged; for exits).
+    fn xmm_writeback(&mut self) {
+        let d = self.xdirty;
+        self.xmm_store(d);
+    }
+
+    /// Write back and forget the cache (before a helper call in the hot path:
+    /// v16-v31 and x13 are caller-saved).
+    fn xmm_spill(&mut self) {
+        self.xmm_writeback();
+        self.xvalid = 0;
+        self.xdirty = 0;
+        self.xbase = false;
+    }
+
+    /// Load a 128-bit constant from the block's literal pool.
+    fn ldr_const(&mut self, vt: u32, v: u128) {
+        let f = self.a.ldr_q_lit_fixup(vt);
+        self.consts.push((f, v));
+    }
+
+    /// Emit the cold paths and the literal pool after the block body.
+    fn finish(&mut self) {
+        debug_assert!(self.seg.is_none());
+        let colds = std::mem::take(&mut self.cold);
+        for c in colds {
+            self.a.bind(c.fix);
+            self.xmm_store(c.dirty);
+            for i in 0..8u32 {
+                if c.saved & (1 << i) != 0 {
+                    self.a.str_q_imm(SAVE + i, XB, 16 * i);
+                }
+            }
+            self.a.stp_x_pre(9, 10, SP, -16);
+            self.a.stp_x_pre(11, 12, SP, -16);
+            self.a.mrs_nzcv(1);
+            self.a.stp_x_pre(1, XB, SP, -16);
+            match &c.kind {
+                ColdKind::Interp(ptrs) => {
+                    for i in 0..4u32 {
+                        self.a.stp_w(G[2 * i as usize], G[2 * i as usize + 1], CTX, 8 * i);
+                    }
+                    let mut fails = Vec::new();
+                    for &ptr in ptrs {
+                        self.a.mov_x(0, CTX);
+                        self.a.mov_x_imm(1, ptr);
+                        self.a.ldr_imm(3, 16, CTX, OFF_HELPER_INTERP);
+                        self.a.blr(16);
+                        fails.push(self.a.cbnz_w_fixup(0));
+                    }
+                    for f in fails {
+                        self.a.bind(f);
+                    }
+                    for i in 0..4u32 {
+                        self.a.ldp_w(G[2 * i as usize], G[2 * i as usize + 1], CTX, 8 * i);
+                    }
+                }
+                ColdKind::Cond(m) => {
+                    self.a.mov_x(0, CTX);
+                    self.a.mov_w_imm(1, *m);
+                    self.a.ldr_imm(3, 16, CTX, OFF_HELPER_COND);
+                    self.a.blr(16);
+                }
+            }
+            self.a.ldp_x_post(1, XB, SP, 16);
+            self.a.msr_nzcv(1);
+            self.a.ldp_x_post(11, 12, SP, 16);
+            self.a.ldp_x_post(9, 10, SP, 16);
+            for i in 0..8u32 {
+                if c.valid & (1 << i) != 0 {
+                    self.a.ldr_q_imm(VX + i, XB, 16 * i);
+                }
+            }
+            match c.kind {
+                ColdKind::Interp(_) => {
+                    self.a.cbz_w_to(0, c.resume);
+                    self.b_exit_keep_w0();
+                }
+                ColdKind::Cond(_) => {
+                    self.a.cmp_w(0, XZR);
+                    self.a.b_to(c.resume);
+                }
+            }
+        }
+        let consts = std::mem::take(&mut self.consts);
+        for (f, v) in consts {
+            self.a.bind(f);
+            for k in 0..4 {
+                self.a.emit((v >> (32 * k)) as u32);
+            }
+        }
+    }
+
+    // --- segments (deferred NaN checks, see Seg) --------------------------------------------------
+
+    /// Before guest xmm i is modified inside a segment: keep its pre-segment value.
+    fn seg_premod(&mut self, i: u32) {
+        let dirty = self.xdirty & (1 << i) != 0;
+        if let Some(seg) = &mut self.seg {
+            if seg.modified & (1 << i) == 0 {
+                seg.modified |= 1 << i;
+                if dirty {
+                    // clean registers still have their old value in CpuState
+                    seg.saved |= 1 << i;
+                    self.a.vmov(SAVE + i, VX + i);
+                }
+            }
+        }
+    }
+
+    /// Record the NaN mask of a float result (lanes of `r` that the instruction
+    /// wrote; other lanes must not be NaN, e.g. zeroed by a scalar op).
+    fn seg_check(&mut self, dbl: bool, r: u32) {
+        let seg = self.seg.as_mut().expect("float op outside a segment");
+        if seg.checked {
+            self.a.fcmeq_v(dbl, V2, r, r);
+            self.a.vand(ACC, ACC, V2);
+        } else {
+            self.a.fcmeq_v(dbl, ACC, r, r);
+            seg.checked = true;
+        }
+    }
+
+    /// Close the current segment: one NaN check for all its float results.
+    fn seg_end(&mut self) {
+        let Some(seg) = self.seg.take() else { return };
+        if !seg.checked {
+            return;
+        }
+        self.a.uminv_4s(V2, ACC);
+        self.a.fmov_w_s(T1, V2);
+        let fix = self.a.cbz_w_fixup(T1);
+        let c = Cold {
+            fix,
+            kind: ColdKind::Interp(seg.insns),
+            dirty: self.xdirty & !seg.modified,
+            saved: seg.saved,
+            valid: self.xvalid,
+            resume: self.a.pos(),
+        };
+        self.cold.push(c);
+    }
+
+    /// Instructions that may be part of a segment: SSE with an xmm destination.
+    fn seg_candidate(insn: &Instruction) -> bool {
+        use Mnemonic::*;
+        insn.op_count() >= 1
+            && insn.op0_kind() == OpKind::Register
+            && insn.op0_register().is_xmm()
+            && !matches!(insn.mnemonic(), Comiss | Ucomiss | Comisd | Ucomisd)
+            && !insn.has_lock_prefix()
     }
 
     fn b_exit(&mut self) {
@@ -423,6 +802,30 @@ impl Translator {
     /// Store the lazy flag descriptor (if flags were produced in this block).
     fn flush_flags(&mut self) {
         if let (true, Some(f)) = (self.dirty, self.nzcv) {
+            if f.kind == K_FCMP {
+                // ucomiss & co: ZF = Z|V (equal or unordered), PF = V, CF = N|V (Lt); OF=SF=AF=0.
+                self.a.ldr_imm(2, T3, CTX, OFF_EFLAGS);
+                self.a.mov_w_imm(T0, ARITH);
+                self.a.bic_w(T3, T3, T0);
+                self.a.cset_w(T0, Cond::Lt);
+                self.a.orr_w(T3, T3, T0);
+                self.a.cset_w(T0, Cond::Vs);
+                self.a.orr_w_lsl(T3, T3, T0, 2);
+                self.a.cset_w(T1, Cond::Eq);
+                self.a.orr_w(T0, T0, T1);
+                self.a.orr_w_lsl(T3, T3, T0, 6);
+                self.a.str_imm(2, T3, CTX, OFF_EFLAGS);
+                self.a.str_imm(2, XZR, CTX, OFF_FKIND);
+                self.dirty = false;
+                return;
+            }
+            // ctx.fcf always holds CF of a lazy descriptor (inc/dec read it inline).
+            match f.kind {
+                K_SUB => self.a.cset_w(FC, Cond::Lo),
+                K_ADD => self.a.cset_w(FC, Cond::Hs),
+                K_LOGIC => self.a.mov_w_imm(FC, 0),
+                _ => {}
+            }
             self.a.mov_w_imm(T0, f.kind);
             self.a.mov_w_imm(T1, f.size);
             self.a.stp_w(T0, T1, CTX, OFF_FKIND);
@@ -447,6 +850,28 @@ impl Translator {
     /// Exit to a known guest eip: a patchable branch (initially to the next
     /// instruction) followed by the slow path into the dispatcher.
     fn exit_direct(&mut self, target: u32) {
+        if let (Some((head, regs)), true) = (self.loop_head, target == self.block_eip) {
+            // back edge of a self loop: keep the xmm cache and CF in FC (state as after the prologue)
+            let saved = (self.xvalid, self.xdirty, self.xbase);
+            for i in 0..8u32 {
+                if regs & (1 << i) != 0 {
+                    self.xget(i);
+                }
+            }
+            match self.nzcv {
+                Some(f) if f.kind == K_SUB => self.a.cset_w(FC, Cond::Lo),
+                Some(f) if f.kind == K_ADD => self.a.cset_w(FC, Cond::Hs),
+                Some(f) if f.kind == K_LOGIC => self.a.mov_w_imm(FC, 0),
+                Some(f) if f.kind == K_FCMP => self.a.cset_w(FC, Cond::Lt),
+                Some(_) => {} // inc/dec: FC holds CF
+                None if self.fc_cf => {}
+                None => self.load_cf_from_ctx(),
+            }
+            self.a.b_to(head);
+            (self.xvalid, self.xdirty, self.xbase) = saved;
+            return;
+        }
+        self.xmm_writeback();
         let pos = self.a.pos();
         self.a.emit(0x1400_0001); // b +1 (patched to the target block later)
         self.exits.push((pos, target));
@@ -458,6 +883,7 @@ impl Translator {
 
     /// Exit with the guest eip in register `r`.
     fn exit_indirect(&mut self, r: u32) {
+        self.xmm_writeback();
         self.a.str_imm(2, r, CTX, OFF_EIP);
         self.a.mov_w_imm(0, EXIT_DISPATCH);
         self.b_exit();
@@ -471,6 +897,17 @@ impl Translator {
         let index = insn.memory_index();
         let disp = insn.memory_displacement32();
         let mut have = false;
+        if base != Register::None && index == Register::None {
+            // [base + disp]: one instruction when the displacement fits an add/sub immediate
+            let d = disp as i32;
+            if (0..4096).contains(&d) {
+                self.a.add_w_imm(T4, gr(base), d as u32);
+                return;
+            } else if (-4095..0).contains(&d) {
+                self.a.sub_w_imm(T4, gr(base), (-d) as u32);
+                return;
+            }
+        }
         if base != Register::None {
             self.a.mov_w(T4, gr(base));
             have = true;
@@ -608,6 +1045,16 @@ impl Translator {
                 Jg | Setg | Cmovg => Cond::Gt,
                 _ => return None,
             },
+            // after FCMP: unordered = C,V; less = N; equal = Z,C; greater = C
+            K_FCMP => match m {
+                Jb | Setb | Cmovb => Cond::Lt,
+                Jae | Setae | Cmovae => Cond::Ge,
+                Ja | Seta | Cmova => Cond::Gt,
+                Jbe | Setbe | Cmovbe => Cond::Le,
+                Jp | Setp | Cmovp => Cond::Vs,
+                Jnp | Setnp | Cmovnp => Cond::Vc,
+                _ => return None,
+            },
             K_INC | K_DEC => match m {
                 Jo | Seto | Cmovo => Cond::Vs,
                 Jno | Setno | Cmovno => Cond::Vc,
@@ -628,15 +1075,45 @@ impl Translator {
 
     /// Evaluate an x86 condition into host flags such that `Ne` means true
     /// (generic path through the helper).
-    fn cond_generic(&mut self, m: Mnemonic) {
+    /// Materialised EFLAGS in ctx are tested inline; a lazy descriptor goes
+    /// through helper_cond on a cold path.
+    fn cond_generic(&mut self, m: Mnemonic) -> Cond {
+        use Mnemonic::*;
         self.flush_flags();
-        self.a.mov_x(0, CTX);
-        self.a.mov_w_imm(1, m as u32);
-        self.a.ldr_imm(3, 16, CTX, OFF_HELPER_COND);
-        self.a.blr(16);
-        self.a.cmp_w(0, XZR);
+        let (base, neg) = cc_base(m);
+        self.a.ldr_imm(2, T0, CTX, OFF_FKIND);
+        let fix = self.a.cbnz_w_fixup(T0);
+        self.a.ldr_imm(2, T1, CTX, OFF_EFLAGS);
+        match base {
+            Jl | Jle => {
+                self.a.eor_w_lsr(T0, T1, T1, 4); // bit 7 = SF ^ OF
+                self.a.mov_w_imm(T2, SF);
+                self.a.and_w(T0, T0, T2);
+                if base == Jle {
+                    self.a.mov_w_imm(T2, ZF);
+                    self.a.and_w(T2, T1, T2);
+                    self.a.orr_w(T0, T0, T2);
+                }
+                self.a.tst_w(T0, T0);
+            }
+            _ => {
+                let mask = match base {
+                    Jo => OF,
+                    Jb => CF,
+                    Je => ZF,
+                    Jbe => CF | ZF,
+                    Js => SF,
+                    _ => PF,
+                };
+                self.a.mov_w_imm(T2, mask);
+                self.a.tst_w(T1, T2);
+            }
+        }
+        let c = Cold { fix, kind: ColdKind::Cond(base as u32), dirty: self.xdirty, saved: 0, valid: self.xvalid, resume: self.a.pos() };
+        self.cold.push(c);
         // After the helper the descriptor in ctx is materialised; register flags are gone.
         self.nzcv = None;
+        if neg { Cond::Eq } else { Cond::Ne }
     }
 
     /// Returns a host condition that is true iff the x86 condition holds.
@@ -644,8 +1121,19 @@ impl Translator {
         if let Some(c) = self.host_cond(m) {
             return c;
         }
-        self.cond_generic(m);
-        Cond::Ne
+        if self.nzcv.map(|f| f.kind) == Some(K_FCMP) {
+            let (base, neg) = cc_base(m);
+            if base == Mnemonic::Je {
+                // ZF = Z | V
+                self.flush_flags();
+                self.a.cset_w(T0, Cond::Vs);
+                self.a.csinc_w(T0, T0, XZR, Cond::Ne);
+                self.a.cmp_w(T0, XZR);
+                self.nzcv = None;
+                return if neg { Cond::Eq } else { Cond::Ne };
+            }
+        }
+        self.cond_generic(m)
     }
 
     /// Current CF value into FC (for inc/dec, which preserve CF).
@@ -655,14 +1143,10 @@ impl Translator {
             Some(f) if f.kind == K_ADD => self.a.cset_w(FC, Cond::Hs),
             Some(f) if f.kind == K_LOGIC => self.a.mov_w_imm(FC, 0),
             Some(f) if f.kind == K_INC || f.kind == K_DEC => {} // FC already holds CF
-            _ => {
-                self.flush_flags();
-                self.a.mov_x(0, CTX);
-                self.a.ldr_imm(3, 16, CTX, OFF_HELPER_FLAGS);
-                self.a.blr(16);
-                self.a.ldr_imm(2, FC, CTX, OFF_EFLAGS);
-                self.a.ubfx_w(FC, FC, 0, 1);
-            }
+            Some(f) if f.kind == K_FCMP => self.a.cset_w(FC, Cond::Lt),
+            _ if self.fc_cf => {}
+            // flags in ctx: CF is eflags bit 0 if materialised, else ctx.fcf (see flush_flags)
+            _ => self.load_cf_from_ctx(),
         }
     }
 
@@ -673,6 +1157,8 @@ impl Translator {
         let ptr = &*boxed as *const Instruction as u64;
         self.keep.push(boxed);
         self.flush_flags();
+        self.xmm_spill();
+        self.fc_cf = false;
         for i in 0..4u32 {
             self.a.stp_w(G[2 * i as usize], G[2 * i as usize + 1], CTX, 8 * i);
         }
@@ -685,7 +1171,10 @@ impl Translator {
         }
         self.nzcv = None;
         self.dirty = false;
-        if insn.flow_control() != FlowControl::Next {
+        // MXCSR writes leave the block so that the engine can switch translation mode.
+        if insn.flow_control() != FlowControl::Next
+            || matches!(insn.mnemonic(), Mnemonic::Ldmxcsr | Mnemonic::Fxrstor | Mnemonic::Xrstor)
+        {
             // control transfer: always back to the dispatcher (eip in ctx)
             self.b_exit_keep_w0();
             return false;
@@ -710,9 +1199,32 @@ impl Translator {
 
     /// Translate one instruction; returns false if it ended the block.
     fn insn(&mut self, insn: &Instruction, flags_live: bool) -> bool {
+        let r = self.insn_inner(insn, flags_live);
+        if insn.rflags_modified() != 0 {
+            self.fc_cf = false;
+        }
+        r
+    }
+
+    fn insn_inner(&mut self, insn: &Instruction, flags_live: bool) -> bool {
         use Mnemonic::*;
         let m = insn.mnemonic();
         let size = if insn.op_count() > 0 { interp::op_size(insn, 0) } else { 4 };
+        let cand = Self::seg_candidate(insn);
+        if !cand {
+            self.seg_end();
+        } else if self.seg.is_none() {
+            self.seg = Some(Seg { insns: Vec::new(), modified: 0, saved: 0, checked: false });
+        }
+        if let Some(r) = self.sse(insn, flags_live) {
+            if let Some(seg) = &mut self.seg {
+                let boxed = Box::new(*insn);
+                seg.insns.push(&*boxed as *const Instruction as u64);
+                self.keep.push(boxed);
+            }
+            return r;
+        }
+        self.seg_end();
         // Instructions with prefixes we do not model natively go to the interpreter.
         if insn.has_lock_prefix() || insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix()
             || insn.segment_prefix() == Register::FS || insn.segment_prefix() == Register::GS
@@ -919,20 +1431,21 @@ impl Translator {
                 self.a.mov_w(r0, r1);
                 self.a.mov_w(r1, T0);
             }
-            Seto | Setno | Setb | Setae | Sete | Setne | Setbe | Seta | Sets | Setns | Setl | Setge | Setle | Setg => {
+            Seto | Setno | Setb | Setae | Sete | Setne | Setbe | Seta | Sets | Setns | Setp | Setnp | Setl | Setge
+            | Setle | Setg => {
                 let c = self.cond(m);
                 self.a.cset_w(T0, c);
                 self.store(insn, T0, false);
             }
-            Cmovo | Cmovno | Cmovb | Cmovae | Cmove | Cmovne | Cmovbe | Cmova | Cmovs | Cmovns | Cmovl | Cmovge
-            | Cmovle | Cmovg if size == 4 => {
+            Cmovo | Cmovno | Cmovb | Cmovae | Cmove | Cmovne | Cmovbe | Cmova | Cmovs | Cmovns | Cmovp | Cmovnp
+            | Cmovl | Cmovge | Cmovle | Cmovg if size == 4 => {
                 // Condition first: the generic path calls a helper that clobbers x0-x17.
                 let c = self.cond(m);
                 self.load(insn, 1, T1);
                 let dst = gr(insn.op0_register());
                 self.a.csel_w(dst, T1, dst, c);
             }
-            Jo | Jno | Jb | Jae | Je | Jne | Jbe | Ja | Js | Jns | Jl | Jge | Jle | Jg => {
+            Jo | Jno | Jb | Jae | Je | Jne | Jbe | Ja | Js | Jns | Jp | Jnp | Jl | Jge | Jle | Jg => {
                 let c = self.cond(m);
                 let taken = self.a.bcond_fixup(c);
                 self.exit_direct_flags(insn.next_ip32());
@@ -1090,6 +1603,691 @@ impl Translator {
         true
     }
 
+    // --- SSE ---------------------------------------------------------------------------------------
+
+    /// Operand i (xmm register or memory) in a vector register. Memory is loaded
+    /// into `tmp` with the operand's size (narrow loads zero the upper bits).
+    fn xsrc(&mut self, insn: &Instruction, i: u32, tmp: u32) -> u32 {
+        if insn.op_kind(i) == OpKind::Register {
+            return self.xget(xidx(insn.op_register(i)));
+        }
+        let sz = match insn.memory_size().size() {
+            4 => 2,
+            8 => 3,
+            _ => 4,
+        };
+        self.ea(insn);
+        self.a.ldr_v_uxtw(sz, tmp, BASE, T4);
+        tmp
+    }
+
+    /// Translate an SSE instruction natively. None: not handled here (the
+    /// caller falls back to the interpreter); Some(cont) otherwise.
+    fn sse(&mut self, insn: &Instruction, flags_live: bool) -> Option<bool> {
+        use Mnemonic::*;
+        let m = insn.mnemonic();
+        let n = insn.op_count();
+        let mut has_xmm = false;
+        for i in 0..n {
+            match insn.op_kind(i) {
+                OpKind::Register => {
+                    let r = insn.op_register(i);
+                    if r.is_xmm() {
+                        has_xmm = true;
+                    } else if !(is_gpr(r) && r.size() == 4) {
+                        return None;
+                    }
+                }
+                OpKind::Memory => {
+                    if matches!(insn.segment_prefix(), Register::FS | Register::GS)
+                        || !matches!(insn.memory_size().size(), 4 | 8 | 16)
+                    {
+                        return None;
+                    }
+                }
+                OpKind::Immediate8 => {}
+                _ => return None,
+            }
+        }
+        if insn.has_lock_prefix() {
+            return None;
+        }
+        if !has_xmm && !matches!(m, Cvttss2si | Cvtss2si | Cvttsd2si | Cvtsd2si | Stmxcsr) {
+            return None;
+        }
+        let reg = |i: u32| insn.op_kind(i) == OpKind::Register;
+        let xi = |i: u32| xidx(insn.op_register(i));
+        let fp = self.fp_ok;
+        let is_pd = |m: Mnemonic| {
+            matches!(
+                m,
+                Addpd | Addsd | Subpd | Subsd | Mulpd | Mulsd | Divpd | Divsd | Sqrtpd | Sqrtsd | Minpd | Minsd
+                    | Maxpd | Maxsd | Cmppd | Cmpsd | Comisd | Ucomisd | Cvtsi2sd | Cvttsd2si | Cvtsd2si
+            )
+        };
+        let is_scalar = |m: Mnemonic| {
+            matches!(
+                m,
+                Addss | Addsd | Subss | Subsd | Mulss | Mulsd | Divss | Divsd | Sqrtss | Sqrtsd | Minss | Minsd
+                    | Maxss | Maxsd | Cmpss | Cmpsd
+            )
+        };
+        match m {
+            // ---- data movement ----
+            Movaps | Movups | Movapd | Movupd | Movdqa | Movdqu | Lddqu | Movntps | Movntpd | Movntdq => {
+                if reg(0) {
+                    let d = xi(0);
+                    if reg(1) {
+                        let s = xi(1);
+                        if s != d {
+                            let vs = self.xget(s);
+                            let vd = self.xdef(d);
+                            self.a.vmov(vd, vs);
+                        }
+                    } else {
+                        self.ea(insn);
+                        let vd = self.xdef(d);
+                        self.a.ldr_v_uxtw(4, vd, BASE, T4);
+                    }
+                } else {
+                    let vs = self.xget(xi(1));
+                    self.ea(insn);
+                    self.a.str_v_uxtw(4, vs, BASE, T4);
+                }
+            }
+            Movss | Movsd => {
+                let sz = if m == Movss { 2 } else { 3 };
+                if reg(0) && reg(1) {
+                    let vs = self.xget(xi(1));
+                    let vd = self.xmod(xi(0));
+                    self.a.ins_elem(sz, vd, 0, vs, 0);
+                } else if reg(0) {
+                    self.ea(insn);
+                    let vd = self.xdef(xi(0));
+                    self.a.ldr_v_uxtw(sz, vd, BASE, T4);
+                } else {
+                    let vs = self.xget(xi(1));
+                    self.ea(insn);
+                    self.a.str_v_uxtw(sz, vs, BASE, T4);
+                }
+            }
+            Movd => {
+                if reg(0) && insn.op0_register().is_xmm() {
+                    if reg(1) {
+                        let g = gr(insn.op1_register());
+                        let vd = self.xdef(xi(0));
+                        self.a.fmov_s_w(vd, g);
+                    } else {
+                        self.ea(insn);
+                        let vd = self.xdef(xi(0));
+                        self.a.ldr_v_uxtw(2, vd, BASE, T4);
+                    }
+                } else {
+                    let vs = self.xget(xi(1));
+                    if reg(0) {
+                        self.a.fmov_w_s(gr(insn.op0_register()), vs);
+                    } else {
+                        self.ea(insn);
+                        self.a.str_v_uxtw(2, vs, BASE, T4);
+                    }
+                }
+            }
+            Movq => {
+                if reg(0) && reg(1) {
+                    let vs = self.xget(xi(1));
+                    let vd = self.xdef(xi(0));
+                    self.a.vmov8(vd, vs);
+                } else if reg(0) {
+                    self.ea(insn);
+                    let vd = self.xdef(xi(0));
+                    self.a.ldr_v_uxtw(3, vd, BASE, T4);
+                } else {
+                    let vs = self.xget(xi(1));
+                    self.ea(insn);
+                    self.a.str_v_uxtw(3, vs, BASE, T4);
+                }
+            }
+            Movlps | Movlpd | Movhps | Movhpd => {
+                let hi = matches!(m, Movhps | Movhpd) as u32;
+                if reg(0) {
+                    self.ea(insn);
+                    self.a.ldr_v_uxtw(3, V0, BASE, T4);
+                    let vd = self.xmod(xi(0));
+                    self.a.ins_elem(3, vd, hi, V0, 0);
+                } else {
+                    let vs = self.xget(xi(1));
+                    self.ea(insn);
+                    if hi == 1 {
+                        self.a.ins_elem(3, V0, 0, vs, 1);
+                        self.a.str_v_uxtw(3, V0, BASE, T4);
+                    } else {
+                        self.a.str_v_uxtw(3, vs, BASE, T4);
+                    }
+                }
+            }
+            Movhlps | Movlhps => {
+                let vs = self.xget(xi(1));
+                let vd = self.xmod(xi(0));
+                if m == Movhlps {
+                    self.a.ins_elem(3, vd, 0, vs, 1);
+                } else {
+                    self.a.ins_elem(3, vd, 1, vs, 0);
+                }
+            }
+            Movsldup | Movshdup => {
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xdef(xi(0));
+                self.a.vperm(if m == Movsldup { 2 } else { 6 }, 2, vd, vs, vs);
+            }
+            Movddup => {
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xdef(xi(0));
+                self.a.dup_elem(3, vd, vs, 0);
+            }
+            Movmskps | Movmskpd if reg(0) && reg(1) => {
+                let vs = self.xget(xi(1));
+                let g = gr(insn.op0_register());
+                if m == Movmskps {
+                    self.a.vushr(2, V0, vs, 31);
+                    self.ldr_const(V1, (3u128 << 96) | (2u128 << 64) | (1u128 << 32));
+                    self.a.vushl(2, V0, V0, V1);
+                    self.a.addv_4s(V0, V0);
+                    self.a.fmov_w_s(g, V0);
+                } else {
+                    self.a.vushr(3, V0, vs, 63);
+                    self.a.umov_w_s(T0, V0, 0);
+                    self.a.umov_w_s(T1, V0, 2);
+                    self.a.orr_w_lsl(g, T0, T1, 1);
+                }
+            }
+            Stmxcsr => {
+                // Exception flags are only accumulated by the interpreter (approximation).
+                self.ensure_xbase();
+                self.a.ldr_imm(2, T0, XB, MXCSR_OFF - XMM_OFF);
+                self.ea(insn);
+                self.a.str_uxtw(2, T0, BASE, T4);
+            }
+
+            // ---- float arithmetic ----
+            Addps | Addss | Addpd | Addsd | Subps | Subss | Subpd | Subsd | Mulps | Mulss | Mulpd | Mulsd | Divps
+            | Divss | Divpd | Divsd | Sqrtps | Sqrtss | Sqrtpd | Sqrtsd
+                if fp =>
+            {
+                let (dbl, scalar) = (is_pd(m), is_scalar(m));
+                let vs = self.xsrc(insn, 1, V1);
+                let d = xi(0);
+                let sqrt = matches!(m, Sqrtps | Sqrtss | Sqrtpd | Sqrtsd);
+                // packed: computed in place (the segment keeps the old value); scalar: via V0
+                let (vd, r) = if scalar {
+                    (self.xget(d), V0)
+                } else if sqrt {
+                    let vd = self.xdef(d);
+                    (vd, vd)
+                } else {
+                    let vd = self.xmod(d);
+                    (vd, vd)
+                };
+                let op = match m {
+                    Addps | Addss | Addpd | Addsd => 0,
+                    Subps | Subss | Subpd | Subsd => 1,
+                    Mulps | Mulss | Mulpd | Mulsd => 2,
+                    Divps | Divss | Divpd | Divsd => 3,
+                    _ => 4,
+                };
+                match (op, scalar) {
+                    (0, true) => self.a.fadd_s(dbl, r, vd, vs),
+                    (1, true) => self.a.fsub_s(dbl, r, vd, vs),
+                    (2, true) => self.a.fmul_s(dbl, r, vd, vs),
+                    (3, true) => self.a.fdiv_s(dbl, r, vd, vs),
+                    (_, true) => self.a.fsqrt_s(dbl, r, vs),
+                    (0, false) => self.a.fadd_v(dbl, r, vd, vs),
+                    (1, false) => self.a.fsub_v(dbl, r, vd, vs),
+                    (2, false) => self.a.fmul_v(dbl, r, vd, vs),
+                    (3, false) => self.a.fdiv_v(dbl, r, vd, vs),
+                    (_, false) => self.a.fsqrt_v(dbl, r, vs),
+                }
+                // scalar ops zero the upper lanes of V0, so a full-width check is fine
+                self.seg_check(dbl, r);
+                if scalar {
+                    let vd = self.xmod(d);
+                    self.a.ins_elem(if dbl { 3 } else { 2 }, vd, 0, V0, 0);
+                }
+            }
+            // x86: min = a < b ? a : b, max = a > b ? a : b (second operand on NaN / equal)
+            Minps | Minss | Minpd | Minsd | Maxps | Maxss | Maxpd | Maxsd if fp => {
+                let (dbl, scalar) = (is_pd(m), is_scalar(m));
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xmod(xi(0));
+                if matches!(m, Maxps | Maxss | Maxpd | Maxsd) {
+                    self.a.fcmgt_v(dbl, V0, vd, vs);
+                } else {
+                    self.a.fcmgt_v(dbl, V0, vs, vd);
+                }
+                if scalar {
+                    self.a.vbsl(V0, vd, vs);
+                    self.a.ins_elem(if dbl { 3 } else { 2 }, vd, 0, V0, 0);
+                } else {
+                    self.a.vbif(vd, vs, V0);
+                }
+            }
+            Cmpps | Cmpss | Cmppd | Cmpsd if fp && reg(0) => {
+                let (dbl, scalar) = (is_pd(m), is_scalar(m));
+                let pred = insn.immediate8() as u32 & 7;
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xmod(xi(0));
+                match pred {
+                    0 | 4 => self.a.fcmeq_v(dbl, V0, vd, vs),
+                    1 | 5 => self.a.fcmgt_v(dbl, V0, vs, vd),
+                    2 | 6 => self.a.fcmge_v(dbl, V0, vs, vd),
+                    _ => {
+                        self.a.fcmeq_v(dbl, V0, vd, vd);
+                        self.a.fcmeq_v(dbl, V2, vs, vs);
+                        self.a.vand(V0, V0, V2);
+                    }
+                }
+                if matches!(pred, 3 | 4 | 5 | 6) {
+                    self.a.vnot(V0, V0);
+                }
+                if scalar {
+                    self.a.ins_elem(if dbl { 3 } else { 2 }, vd, 0, V0, 0);
+                } else {
+                    self.a.vmov(vd, V0);
+                }
+            }
+            Comiss | Ucomiss | Comisd | Ucomisd if fp => {
+                let dbl = is_pd(m);
+                let vs = self.xsrc(insn, 1, V1);
+                let va = self.xget(xi(0));
+                self.a.fcmp_s(dbl, va, vs);
+                self.nzcv = Some(FlagSrc { kind: K_FCMP, size: 4 });
+                self.dirty = flags_live;
+            }
+
+            // ---- conversions ----
+            Cvtsi2ss | Cvtsi2sd if fp => {
+                let dbl = m == Cvtsi2sd;
+                let w = if reg(1) {
+                    gr(insn.op1_register())
+                } else {
+                    self.ea(insn);
+                    self.a.ldr_uxtw(2, T0, BASE, T4);
+                    T0
+                };
+                self.a.scvtf_s_w(dbl, V0, w);
+                let vd = self.xmod(xi(0));
+                self.a.ins_elem(if dbl { 3 } else { 2 }, vd, 0, V0, 0);
+            }
+            Cvttss2si | Cvtss2si | Cvttsd2si | Cvtsd2si if fp && reg(0) => {
+                // x86 returns 0x80000000 for NaN and out-of-range values; ARM saturates.
+                let dbl = is_pd(m);
+                let vs = self.xsrc(insn, 1, V1);
+                let g = gr(insn.op0_register());
+                let save = self.nzcv.is_some();
+                if save {
+                    self.a.mrs_nzcv(NZ);
+                }
+                if matches!(m, Cvttss2si | Cvttsd2si) {
+                    self.a.fcvtzs_x(dbl, T0, vs);
+                } else {
+                    self.a.fcvtns_x(dbl, T0, vs);
+                }
+                self.a.cmp_x_sxtw(T0, T0);
+                self.a.mov_w_imm(T1, 0x8000_0000);
+                self.a.csel_w(T0, T0, T1, Cond::Eq);
+                self.a.fcmp_s(dbl, vs, vs);
+                self.a.csel_w(g, T1, T0, Cond::Vs);
+                if save {
+                    self.a.msr_nzcv(NZ);
+                }
+            }
+            Cvtss2sd | Cvtsd2ss if fp => {
+                let vs = self.xsrc(insn, 1, V1);
+                if m == Cvtss2sd {
+                    self.a.fcvt_d_s(V0, vs);
+                } else {
+                    self.a.fcvt_s_d(V0, vs);
+                }
+                let vd = self.xmod(xi(0));
+                self.a.ins_elem(if m == Cvtss2sd { 3 } else { 2 }, vd, 0, V0, 0);
+            }
+            Cvtps2pd | Cvtpd2ps | Cvtdq2ps | Cvtdq2pd if fp => {
+                let vs = self.xsrc(insn, 1, V1);
+                match m {
+                    Cvtps2pd => self.a.fcvtl_2d(V0, vs),
+                    Cvtpd2ps => self.a.fcvtn_2s(V0, vs),
+                    Cvtdq2ps => self.a.scvtf_v(false, V0, vs),
+                    _ => {
+                        self.a.sxtl_2d(V0, vs);
+                        self.a.scvtf_v(true, V0, V0);
+                    }
+                }
+                let vd = self.xdef(xi(0));
+                self.a.vmov(vd, V0);
+            }
+            Cvttps2dq | Cvtps2dq if fp => {
+                let vs = self.xsrc(insn, 1, V1);
+                if m == Cvttps2dq {
+                    self.a.fcvtzs_4s(V0, vs);
+                } else {
+                    self.a.fcvtns_4s(V0, vs);
+                }
+                // lanes with !(x < 2^31) (too large or NaN) -> 0x80000000
+                self.a.movi_4s(V2, 0x4f, 24);
+                self.a.fcmgt_v(false, V2, V2, vs);
+                self.a.movi_4s(V1, 0x80, 24);
+                self.a.vbif(V0, V1, V2);
+                let vd = self.xdef(xi(0));
+                self.a.vmov(vd, V0);
+            }
+
+            Haddps | Haddpd | Hsubps | Hsubpd | Addsubps | Addsubpd if fp => {
+                let dbl = matches!(m, Haddpd | Hsubpd | Addsubpd);
+                let sz = if dbl { 3 } else { 2 };
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xmod(xi(0));
+                match m {
+                    Haddps | Haddpd => self.a.faddp_v(dbl, vd, vd, vs),
+                    Hsubps | Hsubpd => {
+                        self.a.vperm(1, sz, V0, vd, vs); // even elements
+                        self.a.vperm(5, sz, V2, vd, vs); // odd elements
+                        self.a.fsub_v(dbl, vd, V0, V2);
+                    }
+                    Addsubps => {
+                        self.a.fsub_v(false, V0, vd, vs);
+                        self.a.fadd_v(false, V2, vd, vs);
+                        self.a.rev64_4s(V2, V2);
+                        self.a.vperm(2, 2, vd, V0, V2); // [sub0, add1, sub2, add3]
+                    }
+                    _ => {
+                        self.a.fadd_v(true, V2, vd, vs);
+                        self.a.fsub_v(true, vd, vd, vs);
+                        self.a.ins_elem(3, vd, 1, V2, 1);
+                    }
+                }
+                self.seg_check(dbl, vd);
+            }
+            // The interpreter defines rcp/rsqrt as the correctly rounded value computed in
+            // double precision, with denormal inputs as zero and tiny rcp results flushed
+            // (MXCSR is ignored). Same computation here (host FPCR is the default).
+            Rcpps | Rcpss | Rsqrtps | Rsqrtss => {
+                let rsqrt = matches!(m, Rsqrtps | Rsqrtss);
+                let vs = self.xsrc(insn, 1, V1);
+                // a' = denormal ? signed zero : a
+                self.a.movi_4s(V4, 0x80, 16); // 2^-126
+                self.a.facgt_v(false, V5, V4, vs);
+                self.a.movi_4s(V6, 0x80, 24); // sign bit
+                self.a.vand(V2, vs, V6);
+                self.a.vbsl(V5, V2, vs);
+                self.a.fcvtl_2d(V0, V5);
+                self.a.fcvtl_2d_hi(V2, V5);
+                if rsqrt {
+                    self.a.v2misc(1, 1, 3, 0x1f, V0, V0); // fsqrt .2d
+                    self.a.v2misc(1, 1, 3, 0x1f, V2, V2);
+                }
+                self.a.fmov_2d_one(V1);
+                self.a.fdiv_v(true, V0, V1, V0);
+                self.a.fdiv_v(true, V2, V1, V2);
+                self.a.fcvtn_2s(V0, V0);
+                self.a.fcvtn_4s_hi(V0, V2);
+                if rsqrt {
+                    // negative (non-zero, non-NaN) inputs -> x86 default NaN
+                    self.a.fcmlt_zero_4s(V2, V5);
+                    self.ldr_const(V1, 0xffc0_0000_ffc0_0000_ffc0_0000_ffc0_0000);
+                    self.a.vbsl(V2, V1, V0);
+                    self.a.vmov(V0, V2);
+                } else {
+                    // tiny result or |a| >= 2^126 -> signed zero
+                    self.a.facgt_v(false, V2, V4, V0);
+                    self.ldr_const(V1, 0x7e80_0000_7e80_0000_7e80_0000_7e80_0000);
+                    self.a.facge_v(false, V1, V5, V1);
+                    self.a.vorr(V2, V2, V1);
+                    self.a.vand(V1, V0, V6);
+                    self.a.vbsl(V2, V1, V0);
+                    self.a.vmov(V0, V2);
+                }
+                if matches!(m, Rcpss | Rsqrtss) {
+                    let vd = self.xmod(xi(0));
+                    self.a.ins_elem(2, vd, 0, V0, 0);
+                } else {
+                    let vd = self.xdef(xi(0));
+                    self.a.vmov(vd, V0);
+                }
+            }
+            Pmaddwd | Pmulhw | Pmulhuw | Pmuludq => {
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xmod(xi(0));
+                match m {
+                    Pmaddwd => {
+                        self.a.vmull(false, false, 1, V0, vd, vs);
+                        self.a.vmull(true, false, 1, V2, vd, vs);
+                        self.a.vaddp(2, vd, V0, V2);
+                    }
+                    Pmulhw | Pmulhuw => {
+                        let u = m == Pmulhuw;
+                        self.a.vmull(false, u, 1, V0, vd, vs);
+                        self.a.vmull(true, u, 1, V2, vd, vs);
+                        self.a.vperm(5, 1, vd, V0, V2); // high halves
+                    }
+                    _ => {
+                        self.a.xtn_2s(V0, vd);
+                        self.a.xtn_2s(V2, vs);
+                        self.a.vmull(false, true, 2, vd, V0, V2);
+                    }
+                }
+            }
+            Pshuflw | Pshufhw => {
+                let imm = insn.immediate8() as u32;
+                let o = if m == Pshufhw { 4 } else { 0 };
+                let vs = self.xsrc(insn, 1, V1);
+                self.a.vmov(V0, vs);
+                for k in 0..4 {
+                    self.a.ins_elem(1, V0, o + k, vs, o + ((imm >> (2 * k)) & 3));
+                }
+                let vd = self.xdef(xi(0));
+                self.a.vmov(vd, V0);
+            }
+            Pmovmskb if reg(0) && reg(1) => {
+                let vs = self.xget(xi(1));
+                let g = gr(insn.op0_register());
+                self.a.vushr_q(1, 0, V0, vs, 7);
+                self.ldr_const(V1, 0x0706_0504_0302_0100_0706_0504_0302_0100);
+                self.a.vushl(0, V0, V0, V1);
+                self.a.addv_8b(V2, V0);
+                self.a.ext16(V0, V0, V0, 8);
+                self.a.addv_8b(V0, V0);
+                self.a.umov_w(0, T0, V2, 0);
+                self.a.umov_w(0, T1, V0, 0);
+                self.a.orr_w_lsl(g, T0, T1, 8);
+            }
+            Pextrw if reg(0) && insn.code() == iced_x86::Code::Pextrw_r32_xmm_imm8 => {
+                let vs = self.xget(xi(1));
+                self.a.umov_w(1, gr(insn.op0_register()), vs, insn.immediate8() as u32 & 7);
+            }
+            Pinsrw if reg(1) => {
+                let vd = self.xmod(xi(0));
+                self.a.ins_gen(1, vd, insn.immediate8() as u32 & 7, gr(insn.op1_register()));
+            }
+
+            // ---- logic ----
+            Andps | Andpd | Pand | Andnps | Andnpd | Pandn | Orps | Orpd | Por | Xorps | Xorpd | Pxor => {
+                let d = xi(0);
+                if reg(1) && xi(1) == d && matches!(m, Xorps | Xorpd | Pxor | Andnps | Andnpd | Pandn) {
+                    let vd = self.xdef(d);
+                    self.a.vzero(vd);
+                } else {
+                    let vs = self.xsrc(insn, 1, V1);
+                    let vd = self.xmod(d);
+                    match m {
+                        Andps | Andpd | Pand => self.a.vand(vd, vd, vs),
+                        Andnps | Andnpd | Pandn => self.a.vbic(vd, vs, vd),
+                        Orps | Orpd | Por => self.a.vorr(vd, vd, vs),
+                        _ => self.a.veor(vd, vd, vs),
+                    }
+                }
+            }
+
+            // ---- shuffles ----
+            Shufps => {
+                let imm = insn.immediate8() as u32;
+                let sel = [imm & 3, (imm >> 2) & 3, (imm >> 4) & 3, (imm >> 6) & 3];
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xmod(xi(0));
+                if vs == vd && sel.iter().all(|&x| x == sel[0]) {
+                    self.a.dup_elem(2, vd, vd, sel[0]);
+                } else {
+                    self.a.ins_elem(2, V0, 0, vd, sel[0]);
+                    self.a.ins_elem(2, V0, 1, vd, sel[1]);
+                    self.a.ins_elem(2, V0, 2, vs, sel[2]);
+                    self.a.ins_elem(2, V0, 3, vs, sel[3]);
+                    self.a.vmov(vd, V0);
+                }
+            }
+            Pshufd => {
+                let imm = insn.immediate8() as u32;
+                let sel = [imm & 3, (imm >> 2) & 3, (imm >> 4) & 3, (imm >> 6) & 3];
+                let vs = self.xsrc(insn, 1, V1);
+                if sel.iter().all(|&x| x == sel[0]) {
+                    let vd = self.xdef(xi(0));
+                    self.a.dup_elem(2, vd, vs, sel[0]);
+                } else {
+                    for (k, &j) in sel.iter().enumerate() {
+                        self.a.ins_elem(2, V0, k as u32, vs, j);
+                    }
+                    let vd = self.xdef(xi(0));
+                    self.a.vmov(vd, V0);
+                }
+            }
+            Shufpd => {
+                let imm = insn.immediate8() as u32;
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xmod(xi(0));
+                self.a.ins_elem(3, V0, 0, vd, imm & 1);
+                self.a.ins_elem(3, V0, 1, vs, (imm >> 1) & 1);
+                self.a.vmov(vd, V0);
+            }
+            Unpcklps | Unpckhps | Unpcklpd | Unpckhpd | Punpcklbw | Punpcklwd | Punpckldq | Punpcklqdq | Punpckhbw
+            | Punpckhwd | Punpckhdq | Punpckhqdq => {
+                let sz = match m {
+                    Punpcklbw | Punpckhbw => 0,
+                    Punpcklwd | Punpckhwd => 1,
+                    Unpcklps | Unpckhps | Punpckldq | Punpckhdq => 2,
+                    _ => 3,
+                };
+                let hi = matches!(m, Unpckhps | Unpckhpd | Punpckhbw | Punpckhwd | Punpckhdq | Punpckhqdq);
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xmod(xi(0));
+                self.a.vperm(if hi { 7 } else { 3 }, sz, vd, vd, vs);
+            }
+
+            // ---- integer SIMD ----
+            Paddb | Paddw | Paddd | Paddq | Psubb | Psubw | Psubd | Psubq | Pmullw | Pcmpeqb | Pcmpeqw | Pcmpeqd
+            | Pcmpgtb | Pcmpgtw | Pcmpgtd | Paddsb | Paddsw | Paddusb | Paddusw | Psubsb | Psubsw | Psubusb
+            | Psubusw | Pminub | Pmaxub | Pminsw | Pmaxsw | Pavgb | Pavgw => {
+                let d = xi(0);
+                if reg(1) && xi(1) == d && matches!(m, Psubb | Psubw | Psubd | Psubq | Psubsb | Psubsw | Psubusb | Psubusw) {
+                    let vd = self.xdef(d);
+                    self.a.vzero(vd);
+                } else {
+                    let vs = self.xsrc(insn, 1, V1);
+                    let vd = self.xmod(d);
+                    // (U, size, opcode) of the AdvSIMD "three same" encoding
+                    let (u, sz, opc) = match m {
+                        Paddb => (0, 0, 0x10),
+                        Paddw => (0, 1, 0x10),
+                        Paddd => (0, 2, 0x10),
+                        Paddq => (0, 3, 0x10),
+                        Psubb => (1, 0, 0x10),
+                        Psubw => (1, 1, 0x10),
+                        Psubd => (1, 2, 0x10),
+                        Psubq => (1, 3, 0x10),
+                        Pmullw => (0, 1, 0x13),
+                        Pcmpeqb => (1, 0, 0x11),
+                        Pcmpeqw => (1, 1, 0x11),
+                        Pcmpeqd => (1, 2, 0x11),
+                        Pcmpgtb => (0, 0, 0x06),
+                        Pcmpgtw => (0, 1, 0x06),
+                        Pcmpgtd => (0, 2, 0x06),
+                        Paddsb => (0, 0, 0x01),
+                        Paddsw => (0, 1, 0x01),
+                        Paddusb => (1, 0, 0x01),
+                        Paddusw => (1, 1, 0x01),
+                        Psubsb => (0, 0, 0x05),
+                        Psubsw => (0, 1, 0x05),
+                        Psubusb => (1, 0, 0x05),
+                        Psubusw => (1, 1, 0x05),
+                        Pminub => (1, 0, 0x0d),
+                        Pmaxub => (1, 0, 0x0c),
+                        Pminsw => (0, 1, 0x0d),
+                        Pmaxsw => (0, 1, 0x0c),
+                        Pavgb => (1, 0, 0x02),
+                        _ => (1, 1, 0x02), // Pavgw
+                    };
+                    self.a.v3(1, u, sz, opc, vd, vd, vs);
+                }
+            }
+            Psllw | Pslld | Psllq | Psrlw | Psrld | Psrlq | Psraw | Psrad if insn.op1_kind() == OpKind::Immediate8 => {
+                let sz = match m {
+                    Psllw | Psrlw | Psraw => 1,
+                    Pslld | Psrld | Psrad => 2,
+                    _ => 3,
+                };
+                let bits = 8u32 << sz;
+                let c = insn.immediate8() as u32;
+                let d = xi(0);
+                let arith = matches!(m, Psraw | Psrad);
+                if c == 0 {
+                } else if !arith && c >= bits {
+                    let vd = self.xdef(d);
+                    self.a.vzero(vd);
+                } else {
+                    let vd = self.xmod(d);
+                    match m {
+                        Psllw | Pslld | Psllq => self.a.vshl(sz, vd, vd, c),
+                        Psrlw | Psrld | Psrlq => self.a.vushr(sz, vd, vd, c),
+                        _ => self.a.vsshr(sz, vd, vd, c.min(bits)),
+                    }
+                }
+            }
+            Pslldq | Psrldq => {
+                let c = insn.immediate8() as u32;
+                let d = xi(0);
+                if c > 15 {
+                    let vd = self.xdef(d);
+                    self.a.vzero(vd);
+                } else if c != 0 {
+                    let vd = self.xmod(d);
+                    self.a.vzero(V0);
+                    if m == Psrldq {
+                        self.a.ext16(vd, vd, V0, c);
+                    } else {
+                        self.a.ext16(vd, V0, vd, 16 - c);
+                    }
+                }
+            }
+            Packssdw | Packsswb | Packuswb => {
+                let vs = self.xsrc(insn, 1, V1);
+                let vd = self.xmod(xi(0));
+                match m {
+                    Packssdw => {
+                        self.a.sqxtn(false, 1, V0, vd);
+                        self.a.sqxtn(true, 1, V0, vs);
+                    }
+                    Packsswb => {
+                        self.a.sqxtn(false, 0, V0, vd);
+                        self.a.sqxtn(true, 0, V0, vs);
+                    }
+                    _ => {
+                        self.a.sqxtun(false, 0, V0, vd);
+                        self.a.sqxtun(true, 0, V0, vs);
+                    }
+                }
+                self.a.vmov(vd, V0);
+            }
+            _ => return None,
+        }
+        Some(true)
+    }
+
     /// Like load(), but reuse T4 when operand 0 already computed the address.
     fn load_keep_ea(&mut self, insn: &Instruction, i: u32, rd: u32) {
         if insn.op_kind(i) == OpKind::Memory {
@@ -1109,6 +2307,33 @@ impl Translator {
     fn store_reg0(&mut self, insn: &Instruction, rs: u32) {
         self.a.mov_w(gr(insn.op0_register()), rs);
     }
+}
+
+/// Base condition (as a jcc mnemonic) of a jcc/setcc/cmovcc and whether it is negated.
+fn cc_base(m: Mnemonic) -> (Mnemonic, bool) {
+    use Mnemonic::*;
+    match m {
+        Jo | Seto | Cmovo => (Jo, false),
+        Jno | Setno | Cmovno => (Jo, true),
+        Jb | Setb | Cmovb => (Jb, false),
+        Jae | Setae | Cmovae => (Jb, true),
+        Je | Sete | Cmove => (Je, false),
+        Jne | Setne | Cmovne => (Je, true),
+        Jbe | Setbe | Cmovbe => (Jbe, false),
+        Ja | Seta | Cmova => (Jbe, true),
+        Js | Sets | Cmovs => (Js, false),
+        Jns | Setns | Cmovns => (Js, true),
+        Jp | Setp | Cmovp => (Jp, false),
+        Jnp | Setnp | Cmovnp => (Jp, true),
+        Jl | Setl | Cmovl => (Jl, false),
+        Jge | Setge | Cmovge => (Jl, true),
+        Jle | Setle | Cmovle => (Jle, false),
+        _ => (Jle, true), // Jg | Setg | Cmovg
+    }
+}
+
+fn xidx(r: Register) -> u32 {
+    r as u32 - Register::XMM0 as u32
 }
 
 fn is_gpr(r: Register) -> bool {
@@ -1132,13 +2357,22 @@ fn size_mask(size: u32) -> u32 {
 // --- engine combining JIT and interpreter ---------------------------------------------------------
 
 pub struct JitEngine {
+    /// Code for the default MXCSR (0x1f80 control bits): SSE float ops native.
     pub jit: Jit,
+    /// Code for any other MXCSR (rounding mode, FTZ, DAZ, unmasked exceptions):
+    /// SSE float ops go through the interpreter, data movement/integer SIMD stay native.
+    pub jit_nd: Option<Box<Jit>>,
     pub interp: Box<Engine>,
+}
+
+/// MXCSR control bits (exception flags ignored) for which native SSE float code is exact.
+pub fn mxcsr_native(mxcsr: u32) -> bool {
+    mxcsr & !0x3f == 0x1f80
 }
 
 impl JitEngine {
     pub fn new(stub_lo: u32, stub_hi: u32) -> Self {
-        JitEngine { jit: Jit::new(stub_lo, stub_hi), interp: Box::new(Engine::new(stub_lo, stub_hi)) }
+        JitEngine { jit: Jit::new(stub_lo, stub_hi), jit_nd: None, interp: Box::new(Engine::new(stub_lo, stub_hi)) }
     }
 
     pub fn run(&mut self, st: &mut CpuState, stop: u32) -> Exit {
@@ -1156,7 +2390,14 @@ impl JitEngine {
             if STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
                 DISPATCH_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            let r = self.jit.run_once(&mut ctx);
+            // MXCSR only changes through interpreted instructions that end their block
+            // (ldmxcsr, fxrstor) or host code between runs, so checking here suffices.
+            let r = if mxcsr_native(unsafe { (*ctx.state).mxcsr }) {
+                self.jit.run_once(&mut ctx)
+            } else {
+                let (lo, hi) = (self.jit.stub_lo, self.jit.stub_hi);
+                self.jit_nd.get_or_insert_with(|| Box::new(Jit::with_mode(lo, hi, false))).run_once(&mut ctx)
+            };
             if r == EXIT_FAULT {
                 break unsafe { std::mem::transmute::<u32, Exit>(ctx.exit_reason) };
             }

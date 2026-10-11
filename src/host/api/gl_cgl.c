@@ -187,6 +187,25 @@ THUNK(CGLDestroyRendererInfo) {
 THUNK(CGLDescribeRenderer) {
     GLint v = 0;
     CGLError err = CGLDescribeRenderer(hobj_unwrap(ARG(0)), ARGI(1), ARG(2), &v);
+    // Apple Silicon reports its unified memory as VRAM (tens of GB); 32-bit
+    // games compute byte counts from it and overflow. Report the same capped
+    // size as the IOKit VRAM properties (DXH_VRAM_MB, default 2048).
+    if (err == kCGLNoError) {
+        const char *env = getenv("DXH_VRAM_MB");
+        GLint cap_mb = env ? atoi(env) : 2048;
+        if (cap_mb <= 0 || cap_mb > 4095) cap_mb = 2048;
+        switch (ARG(2)) {
+        case kCGLRPVideoMemoryMegabytes:
+        case kCGLRPTextureMemoryMegabytes:
+            if (v > cap_mb) v = cap_mb;
+            break;
+        case kCGLRPVideoMemory:
+        case kCGLRPTextureMemory:
+            if ((uint32_t)v > (uint32_t)cap_mb << 20 || v < 0) v = (GLint)((uint32_t)cap_mb << 20);
+            break;
+        default: break;
+        }
+    }
     LOGD("cgl: CGLDescribeRenderer(%d, prop %d) = %d (err %d)", ARGI(1), ARG(2), v, err);
     if (ARG(3)) gwrite32(ARG(3), (uint32_t)v);
     RET(err);

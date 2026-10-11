@@ -25,6 +25,34 @@ static int ndl_images;
 // Pseudo handle for system libraries that are implemented by host thunks.
 static gaddr_t host_lib_handle;
 
+// Guest libraries that are never loaded: their exports are host thunks (matched
+// by basename on dlopen; dlsym on the returned handle searches the host symbols).
+static const char *const replaced_libs[] = {
+    "libsteam_api.dylib", // steam.c: bridge to the host steamclient
+};
+#define NREPLACED ((int)(sizeof replaced_libs / sizeof replaced_libs[0]))
+static gaddr_t replaced_handles[NREPLACED];
+
+static gaddr_t replaced_lib_handle(const char *path) {
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    for (int i = 0; i < NREPLACED; i++) {
+        if (strcmp(base, replaced_libs[i]) != 0) continue;
+        pthread_mutex_lock(&dl_lock);
+        if (!replaced_handles[i]) replaced_handles[i] = gheap_calloc(1, 16);
+        pthread_mutex_unlock(&dl_lock);
+        LOGI("dlopen(%s): replaced by host thunks", path);
+        return replaced_handles[i];
+    }
+    return 0;
+}
+
+static bool is_replaced_handle(gaddr_t h) {
+    for (int i = 0; i < NREPLACED; i++)
+        if (h && replaced_handles[i] == h) return true;
+    return false;
+}
+
 static gaddr_t image_name_guest(struct image *img) {
     static struct { struct image *img; gaddr_t name; } cache[64];
     for (int i = 0; i < 64; i++) {
@@ -252,6 +280,8 @@ static void run_image_initializers(struct image *img) {
 THUNK(dlopen) {
     if (!ARG(0)) RET(RTLD_DEFAULT_G);
     const char *path = ARGS(0);
+    gaddr_t replaced = replaced_lib_handle(path);
+    if (replaced) RET(replaced);
     pthread_mutex_lock(&dl_lock);
     for (int i = 0; i < ndl_images; i++) {
         if (strcmp(dl_images[i]->install_name ? dl_images[i]->install_name : "", path) == 0) {
@@ -303,6 +333,9 @@ THUNK(dlsym) {
     gaddr_t h = ARG(0), a = 0;
     if (h == host_lib_handle && h) {
         a = hostsym_lookup(name);
+    } else if (is_replaced_handle(h)) {
+        a = hostsym_lookup(name);
+        if (!a) LOGI("dlsym(%s) in a replaced library: no host thunk", name);
     } else if (h == RTLD_DEFAULT_G || h == RTLD_NEXT_G || h == RTLD_SELF_G || h == RTLD_MAIN_ONLY_G) {
         a = resolve_global(name, NULL, false);
     } else {

@@ -376,6 +376,276 @@ impl Asm {
     }
 }
 
+
+// --- SIMD & FP (used by the SSE translator) -------------------------------------------------------
+// Vector registers are plain numbers 0..31. "q" forms operate on all 128 bits.
+
+/// Element size for vector instructions: 0 = 8-bit, 1 = 16-bit, 2 = 32-bit, 3 = 64-bit.
+pub type Esz = u32;
+
+impl Asm {
+    /// Emit an instruction with a 19-bit pc-relative field at bits 5..23 (patched later).
+    pub fn emit_fixup19(&mut self, insn: u32) -> Fixup {
+        let f = Fixup { pos: self.pos(), kind: 1 };
+        self.emit(insn);
+        f
+    }
+    pub fn cbz_w_to(&mut self, rt: u32, target: usize) {
+        let off = target as i64 - self.pos() as i64;
+        self.emit(0x3400_0000 | (((off as u32) & 0x7ffff) << 5) | rt);
+    }
+    pub fn cbz_x_fixup(&mut self, rt: u32) -> Fixup {
+        self.emit_fixup19(0xb400_0000 | rt)
+    }
+    /// csinc wd, wn, wm, cond
+    pub fn csinc_w(&mut self, rd: u32, rn: u32, rm: u32, c: Cond) {
+        self.emit(0x1a80_0400 | (rm << 16) | ((c as u32) << 12) | (rn << 5) | rd);
+    }
+    /// orr wd, wn, wm, lsl #sh
+    pub fn orr_w_lsl(&mut self, rd: u32, rn: u32, rm: u32, sh: u32) {
+        self.emit(0x2a00_0000 | (rm << 16) | (sh << 10) | (rn << 5) | rd);
+    }
+    /// eor wd, wn, wm, lsr #sh
+    pub fn eor_w_lsr(&mut self, rd: u32, rn: u32, rm: u32, sh: u32) {
+        self.emit(0x4a40_0000 | (rm << 16) | (sh << 10) | (rn << 5) | rd);
+    }
+    /// cmp xn, wm, sxtw
+    pub fn cmp_x_sxtw(&mut self, xn: u32, wm: u32) {
+        self.emit(0xeb20_c000 | (wm << 16) | (xn << 5) | XZR);
+    }
+
+    // loads / stores
+    /// ldr qt, [xn, #off] (off multiple of 16)
+    pub fn ldr_q_imm(&mut self, qt: u32, xn: u32, off: u32) {
+        debug_assert!(off % 16 == 0);
+        self.emit(0x3dc0_0000 | ((off / 16) << 10) | (xn << 5) | qt);
+    }
+    pub fn str_q_imm(&mut self, qt: u32, xn: u32, off: u32) {
+        debug_assert!(off % 16 == 0);
+        self.emit(0x3d80_0000 | ((off / 16) << 10) | (xn << 5) | qt);
+    }
+    /// SIMD load [xn, wm, uxtw]; size: 2 = S, 3 = D, 4 = Q. Narrow loads zero the rest of the register.
+    pub fn ldr_v_uxtw(&mut self, size: u32, vt: u32, xn: u32, wm: u32) {
+        let base = match size {
+            2 => 0xbc60_4800,
+            3 => 0xfc60_4800,
+            _ => 0x3ce0_4800,
+        };
+        self.emit(base | (wm << 16) | (xn << 5) | vt);
+    }
+    pub fn str_v_uxtw(&mut self, size: u32, vt: u32, xn: u32, wm: u32) {
+        let base = match size {
+            2 => 0xbc20_4800,
+            3 => 0xfc20_4800,
+            _ => 0x3ca0_4800,
+        };
+        self.emit(base | (wm << 16) | (xn << 5) | vt);
+    }
+    /// ldr qt, <literal> (19-bit word offset, patched later)
+    pub fn ldr_q_lit_fixup(&mut self, qt: u32) -> Fixup {
+        self.emit_fixup19(0x9c00_0000 | qt)
+    }
+
+    // generic encodings
+    /// Advanced SIMD three same (128-bit unless q == 0).
+    pub fn v3(&mut self, q: u32, u: u32, size: u32, opcode: u32, d: u32, n: u32, m: u32) {
+        self.emit(0x0e20_0400 | (q << 30) | (u << 29) | (size << 22) | (m << 16) | (opcode << 11) | (n << 5) | d);
+    }
+    /// Advanced SIMD two-register miscellaneous.
+    pub fn v2misc(&mut self, q: u32, u: u32, size: u32, opcode: u32, d: u32, n: u32) {
+        self.emit(0x0e20_0800 | (q << 30) | (u << 29) | (size << 22) | (opcode << 12) | (n << 5) | d);
+    }
+    /// Advanced SIMD shift by immediate; `immhb` is the 7-bit immh:immb field.
+    pub fn vshift(&mut self, q: u32, u: u32, immhb: u32, opcode: u32, d: u32, n: u32) {
+        self.emit(0x0f00_0400 | (q << 30) | (u << 29) | (immhb << 16) | (opcode << 11) | (n << 5) | d);
+    }
+
+    // moves
+    /// mov vd.16b, vn.16b
+    pub fn vmov(&mut self, d: u32, n: u32) {
+        if d != n {
+            self.v3(1, 0, 2, 0x03, d, n, n);
+        }
+    }
+    /// mov vd.8b, vn.8b (copies the low 64 bits, zeroes the upper half)
+    pub fn vmov8(&mut self, d: u32, n: u32) {
+        self.v3(0, 0, 2, 0x03, d, n, n);
+    }
+    /// movi vd.2d, #0
+    pub fn vzero(&mut self, d: u32) {
+        self.emit(0x6f00_e400 | d);
+    }
+    /// movi vd.4s, #imm8, lsl #shift (shift 0/8/16/24)
+    pub fn movi_4s(&mut self, d: u32, imm8: u32, shift: u32) {
+        let cmode = (shift / 8) << 1;
+        self.emit(0x4f00_0400 | (((imm8 >> 5) & 7) << 16) | (cmode << 12) | ((imm8 & 31) << 5) | d);
+    }
+    /// ins vd.<sz>[i], vn.<sz>[j]
+    pub fn ins_elem(&mut self, sz: Esz, d: u32, i: u32, n: u32, j: u32) {
+        let imm5 = ((i << 1) | 1) << sz;
+        let imm4 = j << sz;
+        self.emit(0x6e00_0400 | (imm5 << 16) | (imm4 << 11) | (n << 5) | d);
+    }
+    /// dup vd.<sz>, vn.<sz>[j] (128-bit)
+    pub fn dup_elem(&mut self, sz: Esz, d: u32, n: u32, j: u32) {
+        let imm5 = ((j << 1) | 1) << sz;
+        self.emit(0x4e00_0400 | (imm5 << 16) | (n << 5) | d);
+    }
+    /// umov wd, vn.s[j]
+    pub fn umov_w_s(&mut self, d: u32, n: u32, j: u32) {
+        let imm5 = ((j << 1) | 1) << 2;
+        self.emit(0x0e00_3c00 | (imm5 << 16) | (n << 5) | d);
+    }
+    /// fmov sd, wn (upper bits of vd are zeroed)
+    pub fn fmov_s_w(&mut self, d: u32, n: u32) {
+        self.emit(0x1e27_0000 | (n << 5) | d);
+    }
+    pub fn fmov_w_s(&mut self, d: u32, n: u32) {
+        self.emit(0x1e26_0000 | (n << 5) | d);
+    }
+    pub fn fmov_x_d(&mut self, d: u32, n: u32) {
+        self.emit(0x9e66_0000 | (n << 5) | d);
+    }
+
+    // permutes: opc 1 = uzp1, 2 = trn1, 3 = zip1, 5 = uzp2, 6 = trn2, 7 = zip2
+    pub fn vperm(&mut self, opc: u32, sz: Esz, d: u32, n: u32, m: u32) {
+        self.emit(0x4e00_0800 | (sz << 22) | (m << 16) | (opc << 12) | (n << 5) | d);
+    }
+    /// ext vd.16b, vn.16b, vm.16b, #idx
+    pub fn ext16(&mut self, d: u32, n: u32, m: u32, idx: u32) {
+        self.emit(0x6e00_0000 | (m << 16) | (idx << 11) | (n << 5) | d);
+    }
+
+    // logic (128-bit)
+    pub fn vand(&mut self, d: u32, n: u32, m: u32) { self.v3(1, 0, 0, 0x03, d, n, m) }
+    /// d = n & !m
+    pub fn vbic(&mut self, d: u32, n: u32, m: u32) { self.v3(1, 0, 1, 0x03, d, n, m) }
+    pub fn vorr(&mut self, d: u32, n: u32, m: u32) { self.v3(1, 0, 2, 0x03, d, n, m) }
+    pub fn veor(&mut self, d: u32, n: u32, m: u32) { self.v3(1, 1, 0, 0x03, d, n, m) }
+    /// d = d ? n : m (bitwise)
+    pub fn vbsl(&mut self, d: u32, n: u32, m: u32) { self.v3(1, 1, 1, 0x03, d, n, m) }
+    /// d = m ? d : n (insert n where m is clear)
+    pub fn vbif(&mut self, d: u32, n: u32, m: u32) { self.v3(1, 1, 3, 0x03, d, n, m) }
+    pub fn vnot(&mut self, d: u32, n: u32) { self.v2misc(1, 1, 0, 0x05, d, n) }
+
+    // float vector ops; dbl selects .2d instead of .4s
+    pub fn fadd_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 0, dbl as u32, 0x1a, d, n, m) }
+    pub fn fsub_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 0, 2 | dbl as u32, 0x1a, d, n, m) }
+    pub fn fmul_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 1, dbl as u32, 0x1b, d, n, m) }
+    pub fn fdiv_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 1, dbl as u32, 0x1f, d, n, m) }
+    pub fn fcmeq_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 0, dbl as u32, 0x1c, d, n, m) }
+    pub fn fcmge_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 1, dbl as u32, 0x1c, d, n, m) }
+    pub fn fcmgt_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 1, 2 | dbl as u32, 0x1c, d, n, m) }
+    pub fn fsqrt_v(&mut self, dbl: bool, d: u32, n: u32) { self.v2misc(1, 1, 2 | dbl as u32, 0x1f, d, n) }
+    pub fn scvtf_v(&mut self, dbl: bool, d: u32, n: u32) { self.v2misc(1, 0, dbl as u32, 0x1d, d, n) }
+    /// fcvtzs vd.4s, vn.4s
+    pub fn fcvtzs_4s(&mut self, d: u32, n: u32) { self.v2misc(1, 0, 2, 0x1b, d, n) }
+    /// fcvtns vd.4s, vn.4s
+    pub fn fcvtns_4s(&mut self, d: u32, n: u32) { self.v2misc(1, 0, 0, 0x1a, d, n) }
+    /// fcvtl vd.2d, vn.2s
+    pub fn fcvtl_2d(&mut self, d: u32, n: u32) { self.v2misc(0, 0, 1, 0x17, d, n) }
+    /// fcvtn vd.2s, vn.2d (upper half zeroed)
+    pub fn fcvtn_2s(&mut self, d: u32, n: u32) { self.v2misc(0, 0, 1, 0x16, d, n) }
+    /// sxtl vd.2d, vn.2s
+    pub fn sxtl_2d(&mut self, d: u32, n: u32) { self.vshift(0, 0, 32, 0x14, d, n) }
+    /// uminv sd, vn.4s
+    pub fn uminv_4s(&mut self, d: u32, n: u32) { self.emit(0x6eb1_a800 | (n << 5) | d) }
+    /// addv sd, vn.4s
+    pub fn addv_4s(&mut self, d: u32, n: u32) { self.emit(0x4eb1_b800 | (n << 5) | d) }
+
+    // float scalar ops; dbl selects d registers instead of s
+    fn fp2(&mut self, dbl: bool, opcode: u32, d: u32, n: u32, m: u32) {
+        self.emit(0x1e20_0800 | ((dbl as u32) << 22) | (m << 16) | (opcode << 12) | (n << 5) | d);
+    }
+    pub fn fmul_s(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.fp2(dbl, 0, d, n, m) }
+    pub fn fdiv_s(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.fp2(dbl, 1, d, n, m) }
+    pub fn fadd_s(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.fp2(dbl, 2, d, n, m) }
+    pub fn fsub_s(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.fp2(dbl, 3, d, n, m) }
+    pub fn fsqrt_s(&mut self, dbl: bool, d: u32, n: u32) {
+        self.emit(0x1e21_c000 | ((dbl as u32) << 22) | (n << 5) | d);
+    }
+    /// fcvt dd, sn
+    pub fn fcvt_d_s(&mut self, d: u32, n: u32) { self.emit(0x1e22_c000 | (n << 5) | d) }
+    /// fcvt sd, dn
+    pub fn fcvt_s_d(&mut self, d: u32, n: u32) { self.emit(0x1e62_4000 | (n << 5) | d) }
+    pub fn fcmp_s(&mut self, dbl: bool, n: u32, m: u32) {
+        self.emit(0x1e20_2000 | ((dbl as u32) << 22) | (m << 16) | (n << 5));
+    }
+    /// fcmeq (scalar) sd/dd
+    pub fn fcmeq_s(&mut self, dbl: bool, d: u32, n: u32, m: u32) {
+        self.emit(0x5e20_e400 | ((dbl as u32) << 22) | (m << 16) | (n << 5) | d);
+    }
+    /// scvtf sd/dd, wn
+    pub fn scvtf_s_w(&mut self, dbl: bool, d: u32, n: u32) {
+        self.emit(0x1e22_0000 | ((dbl as u32) << 22) | (n << 5) | d);
+    }
+    /// fcvtzs xd, sn/dn
+    pub fn fcvtzs_x(&mut self, dbl: bool, d: u32, n: u32) {
+        self.emit(0x9e38_0000 | ((dbl as u32) << 22) | (n << 5) | d);
+    }
+    /// fcvtns xd, sn/dn
+    pub fn fcvtns_x(&mut self, dbl: bool, d: u32, n: u32) {
+        self.emit(0x9e20_0000 | ((dbl as u32) << 22) | (n << 5) | d);
+    }
+
+    // integer vector ops (sz = element size)
+    pub fn vadd(&mut self, sz: Esz, d: u32, n: u32, m: u32) { self.v3(1, 0, sz, 0x10, d, n, m) }
+    pub fn vsub(&mut self, sz: Esz, d: u32, n: u32, m: u32) { self.v3(1, 1, sz, 0x10, d, n, m) }
+    pub fn vmul(&mut self, sz: Esz, d: u32, n: u32, m: u32) { self.v3(1, 0, sz, 0x13, d, n, m) }
+    pub fn vcmeq(&mut self, sz: Esz, d: u32, n: u32, m: u32) { self.v3(1, 1, sz, 0x11, d, n, m) }
+    pub fn vcmgt(&mut self, sz: Esz, d: u32, n: u32, m: u32) { self.v3(1, 0, sz, 0x06, d, n, m) }
+    /// ushl vd, vn, vm (per-lane shift by signed amount)
+    pub fn vushl(&mut self, sz: Esz, d: u32, n: u32, m: u32) { self.v3(1, 1, sz, 0x08, d, n, m) }
+    /// shl #sh (0 <= sh < esize)
+    pub fn vshl(&mut self, sz: Esz, d: u32, n: u32, sh: u32) { self.vshift(1, 0, (8 << sz) + sh, 0x0a, d, n) }
+    /// ushr #sh (1 <= sh <= esize)
+    pub fn vushr(&mut self, sz: Esz, d: u32, n: u32, sh: u32) { self.vshift(1, 1, (16 << sz) - sh, 0x00, d, n) }
+    /// sshr #sh (1 <= sh <= esize)
+    pub fn vsshr(&mut self, sz: Esz, d: u32, n: u32, sh: u32) { self.vshift(1, 0, (16 << sz) - sh, 0x00, d, n) }
+    /// faddp vd, vn, vm (pairwise: [n0+n1, n2+n3, m0+m1, m2+m3])
+    pub fn faddp_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 1, dbl as u32, 0x1a, d, n, m) }
+    /// facgt vd, vn, vm (|n| > |m|)
+    pub fn facgt_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 1, 2 | dbl as u32, 0x1d, d, n, m) }
+    /// facge vd, vn, vm (|n| >= |m|)
+    pub fn facge_v(&mut self, dbl: bool, d: u32, n: u32, m: u32) { self.v3(1, 1, dbl as u32, 0x1d, d, n, m) }
+    /// rev64 vd.4s, vn.4s (swap 32-bit lanes within each 64-bit half)
+    pub fn rev64_4s(&mut self, d: u32, n: u32) { self.v2misc(1, 0, 2, 0x00, d, n) }
+    /// fcvtl(2) vd.2d, vn.2s / vn.4s upper half
+    pub fn fcvtl_2d_hi(&mut self, d: u32, n: u32) { self.v2misc(1, 0, 1, 0x17, d, n) }
+    /// fcvtn2 vd.4s, vn.2d (writes the upper half, keeps the lower)
+    pub fn fcvtn_4s_hi(&mut self, d: u32, n: u32) { self.v2misc(1, 0, 1, 0x16, d, n) }
+    /// xtn vd.2s, vn.2d
+    pub fn xtn_2s(&mut self, d: u32, n: u32) { self.v2misc(0, 0, 2, 0x12, d, n) }
+    /// Advanced SIMD three different: smull/umull(2) with opcode 1100.
+    pub fn vmull(&mut self, upper: bool, unsigned: bool, sz: Esz, d: u32, n: u32, m: u32) {
+        self.emit(0x0e20_c000 | ((upper as u32) << 30) | ((unsigned as u32) << 29) | (sz << 22) | (m << 16) | (n << 5) | d);
+    }
+    /// addp vd, vn, vm (integer pairwise add)
+    pub fn vaddp(&mut self, sz: Esz, d: u32, n: u32, m: u32) { self.v3(1, 0, sz, 0x17, d, n, m) }
+    /// fmov vd.2d, #1.0
+    pub fn fmov_2d_one(&mut self, d: u32) { self.emit(0x6f03_f600 | d) }
+    /// addv bd, vn.8b
+    pub fn addv_8b(&mut self, d: u32, n: u32) { self.emit(0x0e31_b800 | (n << 5) | d) }
+    /// umov wd, vn.b[j] / vn.h[j]
+    pub fn umov_w(&mut self, sz: Esz, d: u32, n: u32, j: u32) {
+        let imm5 = ((j << 1) | 1) << sz;
+        self.emit(0x0e00_3c00 | (imm5 << 16) | (n << 5) | d);
+    }
+    /// ins vd.<sz>[i], wn
+    pub fn ins_gen(&mut self, sz: Esz, d: u32, i: u32, n: u32) {
+        let imm5 = ((i << 1) | 1) << sz;
+        self.emit(0x4e00_1c00 | (imm5 << 16) | (n << 5) | d);
+    }
+    /// ushr vd.16b/8h/4s/2d with explicit Q (q = 0: 64-bit vector)
+    pub fn vushr_q(&mut self, q: u32, sz: Esz, d: u32, n: u32, sh: u32) { self.vshift(q, 1, (16 << sz) - sh, 0x00, d, n) }
+    /// fcmlt vd.4s, vn.4s, #0.0
+    pub fn fcmlt_zero_4s(&mut self, d: u32, n: u32) { self.v2misc(1, 0, 2, 0x0e, d, n) }
+    /// sqxtn(2) vd, vn: narrow from element size sz+1 to sz with signed saturation
+    pub fn sqxtn(&mut self, upper: bool, sz: Esz, d: u32, n: u32) { self.v2misc(upper as u32, 0, sz, 0x14, d, n) }
+    /// sqxtun(2): signed to unsigned saturation
+    pub fn sqxtun(&mut self, upper: bool, sz: Esz, d: u32, n: u32) { self.v2misc(upper as u32, 1, sz, 0x12, d, n) }
+}
+
 impl Default for Asm {
     fn default() -> Self {
         Self::new()
