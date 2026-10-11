@@ -160,7 +160,7 @@ struct sig {
     int nargs;
 };
 
-static void parse_sig(const char *enc, struct sig *s, enum abi abi) {
+static void parse_sig_uncached(const char *enc, struct sig *s, enum abi abi) {
     memset(s, 0, sizeof *s);
     const char *p = parse_ty(enc, &s->ret, abi);
     p = skip_digits(p);
@@ -170,9 +170,52 @@ static void parse_sig(const char *enc, struct sig *s, enum abi abi) {
     }
 }
 
+// Parsed trees are never freed, so each distinct encoding is parsed once and
+// shared (parsing per message leaked ~400 bytes per call).
+struct sig_entry {
+    struct sig_entry *next;
+    enum abi abi;
+    struct sig sig;
+    char enc[];
+};
+static struct sig_entry *sig_cache[1024];
+static pthread_mutex_t sig_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void parse_sig(const char *enc, struct sig *s, enum abi abi) {
+    uint32_t h = 2166136261u ^ abi;
+    for (const char *c = enc; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+    struct sig_entry **slot = &sig_cache[h & 1023];
+    pthread_mutex_lock(&sig_lock);
+    for (struct sig_entry *e = *slot; e; e = e->next) {
+        if (e->abi == abi && !strcmp(e->enc, enc)) {
+            pthread_mutex_unlock(&sig_lock);
+            *s = e->sig;
+            return;
+        }
+    }
+    pthread_mutex_unlock(&sig_lock);
+    size_t len = strlen(enc);
+    struct sig_entry *e = malloc(sizeof *e + len + 1);
+    memcpy(e->enc, enc, len + 1);
+    e->abi = abi;
+    parse_sig_uncached(enc, &e->sig, abi);
+    *s = e->sig;
+    pthread_mutex_lock(&sig_lock);
+    e->next = *slot;
+    *slot = e;
+    pthread_mutex_unlock(&sig_lock);
+}
+
+// Single types through the same cache (parsed as a one-element "signature").
+static void parse_ty_cached(const char *enc, struct ty *t, enum abi abi) {
+    struct sig s;
+    parse_sig(enc, &s, abi);
+    *t = s.ret;
+}
+
 uint32_t guest_type_size(const char *enc) {
-    struct ty t = {0};
-    parse_ty(enc, &t, ABI_GUEST);
+    struct ty t;
+    parse_ty_cached(enc, &t, ABI_GUEST);
     return t.size;
 }
 
@@ -596,7 +639,7 @@ void marshal_invocation_to_guest(NSInvocation *inv, gaddr_t gself, gaddr_t gimp,
     gaddr_t scratch = gheap_calloc(1, 256);
     for (NSUInteger i = 2; i < n && (int)i < gs.nargs; i++) {
         struct ty ht = {0};
-        parse_ty([ms getArgumentTypeAtIndex:i], &ht, ABI_HOST);
+        parse_ty_cached([ms getArgumentTypeAtIndex:i], &ht, ABI_HOST);
         uint8_t hbuf[128] = {0};
         [inv getArgument:hbuf atIndex:i];
         memset(g2h(scratch), 0, 256);
@@ -610,7 +653,7 @@ void marshal_invocation_to_guest(NSInvocation *inv, gaddr_t gself, gaddr_t gimp,
     cpu_call_ex(gimp, nw, words, fp, &r);
 
     struct ty hr = {0};
-    parse_ty(ms.methodReturnType, &hr, ABI_HOST);
+    parse_ty_cached(ms.methodReturnType, &hr, ABI_HOST);
     if (hr.code == 'v' || ms.methodReturnLength == 0) {
         if (gret_buf) gheap_free(gret_buf);
         return;
