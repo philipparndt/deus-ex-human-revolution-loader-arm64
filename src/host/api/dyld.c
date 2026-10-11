@@ -85,6 +85,33 @@ THUNK(_dyld_get_image_name) {
     RET(img ? image_name_guest(img) : 0);
 }
 
+// Debug aid (DXH_DEBUG_FDE=1): list FDEs in an image's __eh_frame covering pc.
+static void debug_fdes(struct image *img, const struct image_section *eh, gaddr_t pc) {
+    gaddr_t p = eh->addr, end = eh->addr + eh->size;
+    int n = 0, covering = 0;
+    while (p + 8 <= end) {
+        uint32_t len = gread32(p);
+        if (len == 0) {
+            LOGE("fde: zero terminator at +%#x (section size %#x)", p - eh->addr, eh->size);
+            break;
+        }
+        uint32_t id = gread32(p + 4);
+        if (id != 0) { // FDE; assume pcrel sdata4 encoding
+            gaddr_t begin = p + 8 + gread32(p + 8);
+            uint32_t range = gread32(p + 12);
+            n++;
+            if (pc >= begin && pc < begin + range) {
+                char b1[256];
+                LOGE("fde: +%#x covers [%#x,%#x) %s", p - eh->addr, begin, begin + range,
+                     macho_describe_addr(begin, b1, sizeof b1));
+                covering++;
+            }
+        }
+        p += 4 + len;
+    }
+    LOGE("fde: %d FDEs scanned in %s, %d cover %#x", n, img->path, covering, pc);
+}
+
 // struct dyld_unwind_sections { mh; dwarf_section; dwarf_section_length; compact_unwind_section; length; }
 THUNK(_dyld_find_unwind_sections) {
     struct image *img = image_for_addr(ARG(0));
@@ -92,6 +119,7 @@ THUNK(_dyld_find_unwind_sections) {
     gaddr_t out = ARG(1);
     const struct image_section *eh = macho_section(img, "__TEXT", "__eh_frame");
     const struct image_section *cu = macho_section(img, "__TEXT", "__unwind_info");
+    if (eh && getenv("DXH_DEBUG_FDE")) debug_fdes(img, eh, ARG(0));
     gwrite32(out, img->header);
     gwrite32(out + 4, eh ? eh->addr : 0);
     gwrite32(out + 8, eh ? eh->size : 0);

@@ -250,3 +250,10 @@ THUNK(srandom) { srandom(ARG(0)); }
 THUNK(arc4random) { RET(arc4random()); }
 THUNK(abs) { RET(abs(ARGI(0))); }
 THUNK(labs) { RET(abs(ARGI(0))); }
+
+// --- symbol variants ------------------------------------------------------------------------------
+THUNK_AS(strtod_unix2003, "_strtod$UNIX2003") { thunk_impl_strtod(r); }
+THUNK_AS(strtof_unix2003, "_strtof$UNIX2003") { thunk_impl_strtof(r); }
+// long double results are returned with double precision.
+THUNK(strtold) { thunk_impl_strtod(r); }
+THUNK_AS(strerror_unix2003, "_strerror$UNIX2003") { thunk_impl_strerror(r); }

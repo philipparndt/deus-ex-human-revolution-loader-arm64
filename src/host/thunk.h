@@ -56,9 +56,10 @@ static inline float arg_float(struct guest_regs *r, int i) {
 #define ARGD(i) arg_double(r, i)
 #define ARGF(i) arg_float(r, i)
 
-#define RET(v) (r->ret = (uint32_t)(v))
-#define RET64(v) (r->ret = (uint64_t)(v))
-#define RETD(v) (r->fret = (double)(v), r->fp_ret = 1)
+// RET* set the guest return value and return from the thunk.
+#define RET(v) do { r->ret = (uint32_t)(v); return; } while (0)
+#define RET64(v) do { r->ret = (uint64_t)(v); return; } while (0)
+#define RETD(v) do { r->fret = (double)(v); r->fp_ret = 1; return; } while (0)
 
 void thunks_init(void);
 // Look up a host-provided symbol; returns 0 if none.

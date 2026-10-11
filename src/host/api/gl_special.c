@@ -385,9 +385,9 @@ THUNK(glGetString) {
             buf[len] = 0;
         }
         LOGI("gl: synthesized GL_EXTENSIONS string from %d core-profile extensions", n);
-        RET(cache_string(name, ~0u, buf));
+        gaddr_t cached = cache_string(name, ~0u, buf);
         free(buf);
-        return;
+        RET(cached);
     }
     if (str) LOGD("gl: glGetString(%#x) = \"%s\"", name, str);
     RET(cache_string(name, ~0u, str));

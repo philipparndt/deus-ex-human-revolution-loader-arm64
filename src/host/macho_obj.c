@@ -172,6 +172,114 @@ static void relocate_section(struct obj *o, uint32_t si) {
     }
 }
 
+// --- __eh_frame -------------------------------------------------------------------
+// The assembler resolves pc-relative pointers inside __eh_frame (FDE pc_begin,
+// LSDA, personality) without emitting relocations, assuming the object's own
+// section layout. Since sections move relative to each other when linking,
+// those fields are rewritten here (ld64 does the same).
+
+static uint32_t eh_uleb(gaddr_t *p) {
+    uint32_t r = 0;
+    int shift = 0;
+    uint8_t b;
+    do {
+        b = gread8((*p)++);
+        r |= (uint32_t)(b & 0x7f) << shift;
+        shift += 7;
+    } while (b & 0x80);
+    return r;
+}
+
+static uint32_t enc_size(uint8_t enc) {
+    switch (enc & 0x0f) {
+    case 0x00: case 0x03: case 0x0b: return 4; // absptr (32-bit), udata4, sdata4
+    case 0x02: case 0x0a: return 2;
+    case 0x04: case 0x0c: return 8;
+    default: return 0; // leb128 forms: not used for pc-relative pointers here
+    }
+}
+
+static bool has_reloc_at(const struct obj *o, uint32_t si, uint32_t off) {
+    const struct section *h = o->sects[si].hdr;
+    const struct relocation_info *rel = (const struct relocation_info *)(o->data + h->reloff);
+    for (uint32_t i = 0; i < h->nreloc; i++) {
+        uint32_t raw = *(const uint32_t *)&rel[i];
+        uint32_t a = (raw & R_SCATTERED) ? ((const struct scattered_relocation_info *)&rel[i])->r_address
+                                         : (uint32_t)rel[i].r_address;
+        if (a == off) return true;
+    }
+    return false;
+}
+
+// Rewrite one pc-relative pointer field at guest address `field` (new location).
+static void eh_fix_pcrel(const struct obj *o, uint32_t si, gaddr_t field, uint8_t enc) {
+    if (enc == 0xff || (enc & 0x70) != 0x10) return; // only pcrel needs fixing
+    uint32_t sz = enc_size(enc);
+    if (sz != 4) return;
+    const struct obj_sect *s = &o->sects[si];
+    uint32_t off = field - s->new_addr;
+    if (has_reloc_at(o, si, off)) return; // already handled by a relocation
+    uint32_t orig_field = s->hdr->addr + off;
+    int32_t val = (int32_t)gread32(field);
+    if (val == 0) return;
+    uint32_t orig_target = orig_field + (uint32_t)val;
+    int32_t dt = obj_delta(o, orig_target, NULL);
+    uint32_t new_target = orig_target + (uint32_t)dt;
+    gwrite32(field, new_target - field);
+}
+
+static void fix_eh_frame(const struct obj *o, uint32_t si) {
+    const struct obj_sect *s = &o->sects[si];
+    gaddr_t p = s->new_addr, end = s->new_addr + s->hdr->size;
+    // CIE offset (within section) -> encodings
+    struct cie { uint32_t off; uint8_t fde_enc, lsda_enc; bool has_z; } cies[64];
+    int ncies = 0;
+    while (p + 8 <= end) {
+        uint32_t len = gread32(p);
+        if (len == 0 || len == 0xffffffffu) break;
+        gaddr_t rec = p + 4, rec_end = p + 4 + len;
+        uint32_t id = gread32(rec);
+        if (id == 0) { // CIE
+            struct cie c = {(uint32_t)(p - s->new_addr), 0, 0xff, false};
+            gaddr_t q = rec + 4;
+            uint8_t version = gread8(q++);
+            const char *aug = g2h(q);
+            q += (uint32_t)strlen(aug) + 1;
+            eh_uleb(&q);                       // code alignment
+            eh_uleb(&q);                       // data alignment (sleb; value unused)
+            if (version == 1) q++; else eh_uleb(&q); // return register
+            if (aug[0] == 'z') {
+                c.has_z = true;
+                eh_uleb(&q); // augmentation data length
+                for (const char *a = aug + 1; *a; a++) {
+                    if (*a == 'R') c.fde_enc = gread8(q++);
+                    else if (*a == 'L') c.lsda_enc = gread8(q++);
+                    else if (*a == 'P') {
+                        uint8_t penc = gread8(q++);
+                        eh_fix_pcrel(o, si, q, penc);
+                        q += enc_size(penc);
+                    }
+                }
+            }
+            if (ncies < 64) cies[ncies++] = c;
+        } else { // FDE: id = offset back to its CIE
+            uint32_t cie_off = (uint32_t)(rec - s->new_addr) - id;
+            struct cie *c = NULL;
+            for (int i = 0; i < ncies; i++)
+                if (cies[i].off == cie_off) c = &cies[i];
+            uint8_t fde_enc = c ? c->fde_enc : 0x10;
+            gaddr_t q = rec + 4;
+            eh_fix_pcrel(o, si, q, fde_enc); // pc_begin
+            q += enc_size(fde_enc) * 2;      // pc_begin + pc_range
+            if (c && c->has_z) {
+                uint32_t alen = eh_uleb(&q);
+                if (alen && c->lsda_enc != 0xff) eh_fix_pcrel(o, si, q, c->lsda_enc);
+            }
+        }
+        p = rec_end;
+    }
+}
+
 static void add_member(struct obj **objs, int *n, int *cap, const char *name, const uint8_t *data, size_t size) {
     if (*n == *cap) {
         *cap = *cap ? *cap * 2 : 64;
@@ -383,6 +491,8 @@ struct image *macho_load_objects(const char *name, const char *const *paths, int
     for (int k = 0; k < nobjs; k++) {
         struct obj *o = &objs[k];
         for (uint32_t i = 0; i < o->nsects; i++) relocate_section(o, i);
+        for (uint32_t i = 0; i < o->nsects; i++)
+            if (strncmp(o->sects[i].hdr->sectname, "__eh_frame", 16) == 0) fix_eh_frame(o, i);
         if (!o->dysym) continue;
         const uint32_t *ind = (const uint32_t *)(o->data + o->dysym->indirectsymoff);
         for (uint32_t i = 0; i < o->nsects; i++) {

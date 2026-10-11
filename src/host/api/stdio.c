@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <wchar.h>
 
 #define GFILE_SIZE 88
 #define GFILE_HOST_OFF 16
@@ -216,3 +217,29 @@ static int do_vfscanf(FILE *f, const char *fmt, struct gva va) {
 }
 THUNK(fscanf) { RET(do_vfscanf(FP(0), ARGS(1), GVA_FROM_ARG(2))); }
 THUNK(vfscanf) { RET(do_vfscanf(FP(0), ARGS(1), gva_at(ARG(2)))); }
+
+// --- symbol variants and wide-character stdio ---------------------------------------------------
+THUNK_AS(fdopen_unix2003, "_fdopen$UNIX2003") { RET(gfile_new(fdopen(ARGI(0), ARGS(1)))); }
+THUNK_AS(fputs_unix2003, "_fputs$UNIX2003") { RET(fputs(ARGS(0), FP(1))); }
+THUNK_AS(freopen_unix2003, "_freopen$UNIX2003") {
+    FILE *f = freopen(ARG(0) ? ARGS(0) : NULL, ARGS(1), FP(2));
+    if (!f) RET(0);
+    else {
+        gfile_bind(ARG(2), f);
+        RET(ARG(2));
+    }
+}
+// wint_t and wchar_t are 32-bit on both sides.
+THUNK(getwc) { RET(getwc(FP(0))); }
+THUNK(fgetwc) { RET(fgetwc(FP(0))); }
+THUNK(getwchar) { RET(getwchar()); }
+THUNK(putwc) { RET(putwc((wchar_t)ARG(0), FP(1))); }
+THUNK(fputwc) { RET(fputwc((wchar_t)ARG(0), FP(1))); }
+THUNK(putwchar) { RET(putwchar((wchar_t)ARG(0))); }
+THUNK(ungetwc) { RET(ungetwc((wint_t)ARG(0), FP(1))); }
+THUNK(fgetws) {
+    wchar_t *s = fgetws(ARGP(0), ARGI(1), FP(2));
+    RET(s ? ARG(0) : 0);
+}
+THUNK(fputws) { RET(fputws(ARGP(0), FP(1))); }
+THUNK(fwide) { RET(fwide(FP(0), ARGI(1))); }

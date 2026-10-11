@@ -165,3 +165,10 @@ THUNK(sigaltstack) {
 }
 THUNK(setrlimit) { RET(0); }
 THUNK(strsignal) { RET(guest_static_string(0, strsignal(ARGI(0)))); }
+
+// --- $UNIX2003 symbol variants ---------------------------------------------------------------------
+THUNK_AS(setenv_unix2003, "_setenv$UNIX2003") { thunk_impl_setenv(r); }
+THUNK_AS(unsetenv_unix2003, "_unsetenv$UNIX2003") { thunk_impl_unsetenv(r); }
+THUNK_AS(sleep_unix2003, "_sleep$UNIX2003") { thunk_impl_sleep(r); }
+THUNK_AS(system_unix2003, "_system$UNIX2003") { thunk_impl_system(r); }
+THUNK_AS(sigaltstack_unix2003, "_sigaltstack$UNIX2003") { thunk_impl_sigaltstack(r); }
