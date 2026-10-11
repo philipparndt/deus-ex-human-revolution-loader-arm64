@@ -522,6 +522,14 @@ impl Asm {
     pub fn fmov_x_d(&mut self, d: u32, n: u32) {
         self.emit(0x9e66_0000 | (n << 5) | d);
     }
+    /// fmov dd, xn
+    pub fn fmov_d_x(&mut self, d: u32, n: u32) {
+        self.emit(0x9e67_0000 | (n << 5) | d);
+    }
+    /// scvtf dd, xn
+    pub fn scvtf_d_x(&mut self, d: u32, n: u32) {
+        self.emit(0x9e62_0000 | (n << 5) | d);
+    }
 
     // permutes: opc 1 = uzp1, 2 = trn1, 3 = zip1, 5 = uzp2, 6 = trn2, 7 = zip2
     pub fn vperm(&mut self, opc: u32, sz: Esz, d: u32, n: u32, m: u32) {

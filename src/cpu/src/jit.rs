@@ -31,7 +31,7 @@ use crate::interp::{self, Engine, Step};
 use crate::mem;
 use crate::state::flags::*;
 use crate::state::*;
-use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, Mnemonic, OpKind, Register};
+use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, MemorySize, Mnemonic, OpKind, Register};
 use std::collections::HashMap;
 
 // Host register assignment (see docs/JIT.md).
@@ -63,6 +63,14 @@ const V6: u32 = 6;
 const SAVE: u32 = 24; // v24 + i: pre-segment value of guest xmm i
 const XMM_OFF: u32 = std::mem::offset_of!(CpuState, xmm) as u32;
 const MXCSR_OFF: u32 = std::mem::offset_of!(CpuState, mxcsr) as u32;
+// x87 state, relative to XB (&state.xmm[0]).
+const X87_OFF: u32 = std::mem::offset_of!(CpuState, x87) as u32 - XMM_OFF;
+const X87_TOP: u32 = X87_OFF + std::mem::offset_of!(X87, top) as u32;
+const X87_EMPTY: u32 = X87_OFF + std::mem::offset_of!(X87, empty) as u32;
+const X87_CW: u32 = X87_OFF + std::mem::offset_of!(X87, cw) as u32;
+const X87_SW: u32 = X87_OFF + std::mem::offset_of!(X87, sw) as u32;
+const SW_IE: u32 = 0x0001;
+const SW_SF: u32 = 0x0040;
 
 pub const K_MAT: u32 = 0;
 pub const K_ADD: u32 = 1;
@@ -219,6 +227,7 @@ const OFF_SSE: u32 = 1;
 const OFF_FAST: u32 = 2;
 const OFF_INT: u32 = 4;
 const OFF_ALL: u32 = 8;
+const OFF_X87: u32 = 16;
 /// DXCPU_VERIFY=1: run every block in the interpreter first (memory writes
 /// undone), then translated, and report blocks whose results differ. Blocks are
 /// neither chained nor looped internally in this mode, so one run_once = one block.
@@ -255,6 +264,7 @@ fn jit_off() -> u32 {
                 "fast" => OFF_FAST,
                 "int" => OFF_INT,
                 "all" => OFF_ALL,
+                "x87" => OFF_X87,
                 _ => 0,
             })
             .fold(0, |a, b| a | b)
@@ -905,6 +915,286 @@ impl Translator {
         }
     }
 
+    // --- x87 ------------------------------------------------------------------------------------
+    //
+    // The common x87 data movement natively, with exactly the interpreter's
+    // semantics (fpu.rs): values are f64, TOP/empty/sw live in CpuState.x87;
+    // stack over/underflow and SNaN loads/stores set IE (and SF). Anything
+    // unusual (rounding control other than nearest for fst m32, NaN or out of
+    // range integer stores) runs the instruction in the interpreter via a cold
+    // path, before any state was changed except idempotent status bits.
+
+    fn x87_sw_or(&mut self, bits: u32) {
+        self.a.ldr_imm(1, T5, XB, X87_SW);
+        self.a.mov_w_imm(T3, bits);
+        self.a.orr_w(T5, T5, T3);
+        self.a.str_imm(1, T5, XB, X87_SW);
+    }
+
+    /// dst = byte offset of physical register `p` (relative to XB).
+    fn x87_slot(&mut self, dst: u32, p: u32) {
+        self.a.lsl_w_imm(dst, p, 3);
+        self.a.add_w_imm(dst, dst, X87_OFF);
+    }
+
+    /// V `vd` = ST(i), flagging underflow like fpu::get. Needs T1 = TOP; uses T2, T3, T5.
+    fn x87_get(&mut self, vd: u32, i: u32) {
+        self.a.add_w_imm(T2, T1, i);
+        self.a.ubfx_w(T2, T2, 0, 3);
+        self.a.ldr_imm(2, T3, XB, X87_EMPTY);
+        self.a.lsrv_w(T3, T3, T2);
+        self.a.ubfx_w(T3, T3, 0, 1);
+        let ok = self.a.cbz_w_fixup(T3);
+        self.x87_sw_or(SW_IE | SW_SF);
+        self.a.bind(ok);
+        self.x87_slot(T2, T2);
+        self.a.ldr_v_uxtw(3, vd, XB, T2);
+    }
+
+    /// ST(i) = V `vs` (no tag change, like fpu::set). Needs T1 = TOP; uses T2.
+    fn x87_set(&mut self, vs: u32, i: u32) {
+        self.a.add_w_imm(T2, T1, i);
+        self.a.ubfx_w(T2, T2, 0, 3);
+        self.x87_slot(T2, T2);
+        self.a.str_v_uxtw(3, vs, XB, T2);
+    }
+
+    /// Push V `vs` like fpu::push. Needs T1 = TOP, leaves the new TOP in T1 (and stored).
+    fn x87_push(&mut self, vs: u32) {
+        self.a.sub_w_imm(T1, T1, 1);
+        self.a.ubfx_w(T1, T1, 0, 3);
+        self.a.ldr_imm(2, T3, XB, X87_EMPTY);
+        self.a.lsrv_w(T3, T3, T1);
+        self.a.ubfx_w(T3, T3, 0, 1);
+        let ok = self.a.cbnz_w_fixup(T3); // target slot empty: fine
+        self.x87_sw_or(SW_IE | SW_SF);
+        self.a.bind(ok);
+        self.x87_slot(T2, T1);
+        self.a.str_v_uxtw(3, vs, XB, T2);
+        self.a.mov_w_imm(T3, 1);
+        self.a.lslv_w(T3, T3, T1);
+        self.a.ldr_imm(2, T5, XB, X87_EMPTY);
+        self.a.bic_w(T5, T5, T3);
+        self.a.str_imm(2, T5, XB, X87_EMPTY);
+        self.a.str_imm(2, T1, XB, X87_TOP);
+    }
+
+    /// Pop like fpu::pop. Needs T1 = TOP.
+    fn x87_pop(&mut self) {
+        self.a.mov_w_imm(T3, 1);
+        self.a.lslv_w(T3, T3, T1);
+        self.a.ldr_imm(2, T5, XB, X87_EMPTY);
+        self.a.orr_w(T5, T5, T3);
+        self.a.str_imm(2, T5, XB, X87_EMPTY);
+        self.a.add_w_imm(T1, T1, 1);
+        self.a.ubfx_w(T1, T1, 0, 3);
+        self.a.str_imm(2, T1, XB, X87_TOP);
+    }
+
+    /// f64 bits in T0 (x): if a NaN, set IE for a signalling one and quiet it
+    /// (fpu::f64_load / fst m64). Result back in V `vd`. Uses T2, T3, T5.
+    fn x87_quiet_f64(&mut self, vd: u32) {
+        self.a.fcmp_s(true, vd, vd);
+        let not_nan = self.a.bcond_fixup(Cond::Vc);
+        self.a.lsr_x_imm(T2, T0, 51);
+        self.a.ubfx_w(T2, T2, 0, 1);
+        let quiet = self.a.cbnz_w_fixup(T2);
+        self.x87_sw_or(SW_IE);
+        self.a.mov_x_imm(T3, 1 << 51);
+        self.a.orr_x_lsl(T0, T0, T3, 0);
+        self.a.fmov_d_x(vd, T0);
+        self.a.bind(quiet);
+        self.a.bind(not_nan);
+    }
+
+    /// Run `insn` in the interpreter from a cold path when `fix` is taken.
+    fn x87_cold(&mut self, insn: &Instruction, fix: Fixup, resume: usize) {
+        let boxed = Box::new(*insn);
+        let ptr = &*boxed as *const Instruction as u64;
+        self.keep.push(boxed);
+        let c = Cold {
+            fix,
+            kind: ColdKind::Interp(vec![ptr]),
+            dirty: self.xdirty,
+            saved: 0,
+            valid: self.xvalid,
+            resume,
+        };
+        self.cold.push(c);
+    }
+
+    fn x87(&mut self, insn: &Instruction) -> Option<bool> {
+        use Mnemonic::*;
+        if jit_off() & OFF_X87 != 0 || !self.fp_ok {
+            return None;
+        }
+        let m = insn.mnemonic();
+        if !matches!(m, Fld | Fst | Fstp | Fxch | Fild | Fist | Fistp | Fisttp | Fldz | Fld1 | Emms) {
+            return None;
+        }
+        if insn.has_lock_prefix() || matches!(insn.segment_prefix(), Register::FS | Register::GS) {
+            return None;
+        }
+        let mem = (0..insn.op_count()).any(|i| insn.op_kind(i) == OpKind::Memory);
+        let msize = if mem { insn.memory_size() } else { MemorySize::Unknown };
+        let sti = |r: Register| (r as u32).wrapping_sub(Register::ST0 as u32);
+        // Supported operand forms only.
+        match m {
+            Fld | Fst | Fstp if mem && !matches!(msize, MemorySize::Float32 | MemorySize::Float64) => return None,
+            Fild if !matches!(msize, MemorySize::Int16 | MemorySize::Int32 | MemorySize::Int64) => return None,
+            Fist | Fistp | Fisttp if !matches!(msize, MemorySize::Int16 | MemorySize::Int32) => return None,
+            _ => {}
+        }
+        if mem {
+            self.ea(insn);
+        }
+        self.ensure_xbase();
+        if m == Emms {
+            self.a.mov_w_imm(T0, 0xff);
+            self.a.str_imm(2, T0, XB, X87_EMPTY);
+            return Some(true);
+        }
+        self.a.ldr_imm(2, T1, XB, X87_TOP);
+        let mut cold: Vec<Fixup> = Vec::new();
+        match m {
+            Fld if mem && msize == MemorySize::Float32 => {
+                self.a.ldr_uxtw(2, T0, BASE, T4);
+                // SNaN (quiet bit clear) sets IE; fcvt quiets and keeps sign and payload.
+                self.a.lsl_w_imm(T2, T0, 1);
+                self.a.mov_w_imm(T3, 0xff00_0000);
+                self.a.cmp_w(T2, T3);
+                let not_nan = self.a.bcond_fixup(Cond::Ls);
+                self.a.ubfx_w(T2, T0, 22, 1);
+                let quiet = self.a.cbnz_w_fixup(T2);
+                self.x87_sw_or(SW_IE);
+                self.a.bind(quiet);
+                self.a.bind(not_nan);
+                self.a.fmov_s_w(V0, T0);
+                self.a.fcvt_d_s(V0, V0);
+                self.x87_push(V0);
+            }
+            Fld if mem => {
+                self.a.ldr_uxtw(3, T0, BASE, T4);
+                self.a.fmov_d_x(V0, T0);
+                self.x87_quiet_f64(V0);
+                self.x87_push(V0);
+            }
+            Fld => {
+                self.x87_get(V0, sti(insn.op0_register()));
+                self.x87_push(V0);
+            }
+            Fldz | Fld1 => {
+                self.a.mov_x_imm(T0, if m == Fldz { 0 } else { 1.0f64.to_bits() });
+                self.a.fmov_d_x(V0, T0);
+                self.x87_push(V0);
+            }
+            Fild => {
+                match msize {
+                    MemorySize::Int16 => {
+                        self.a.ldrs_w_uxtw(1, T0, BASE, T4);
+                        self.a.scvtf_s_w(true, V0, T0);
+                    }
+                    MemorySize::Int32 => {
+                        self.a.ldr_uxtw(2, T0, BASE, T4);
+                        self.a.scvtf_s_w(true, V0, T0);
+                    }
+                    _ => {
+                        self.a.ldr_uxtw(3, T0, BASE, T4);
+                        self.a.scvtf_d_x(V0, T0);
+                    }
+                }
+                self.x87_push(V0);
+            }
+            Fst | Fstp if mem && msize == MemorySize::Float32 => {
+                self.x87_get(V0, 0);
+                // rounding control other than nearest: interpreter
+                self.a.ldr_imm(1, T0, XB, X87_CW);
+                self.a.ubfx_w(T0, T0, 10, 2);
+                cold.push(self.a.cbnz_w_fixup(T0));
+                self.a.fcmp_s(true, V0, V0);
+                let not_nan = self.a.bcond_fixup(Cond::Vc);
+                self.a.fmov_x_d(T0, V0);
+                self.a.lsr_x_imm(T2, T0, 51);
+                self.a.ubfx_w(T2, T2, 0, 1);
+                let quiet = self.a.cbnz_w_fixup(T2);
+                self.x87_sw_or(SW_IE);
+                self.a.bind(quiet);
+                self.a.bind(not_nan);
+                self.a.fcvt_s_d(V1, V0);
+                self.a.str_v_uxtw(2, V1, BASE, T4);
+                if m == Fstp {
+                    self.x87_pop();
+                }
+            }
+            Fst | Fstp if mem => {
+                self.x87_get(V0, 0);
+                self.a.fmov_x_d(T0, V0);
+                self.x87_quiet_f64(V0);
+                self.a.str_v_uxtw(3, V0, BASE, T4);
+                if m == Fstp {
+                    self.x87_pop();
+                }
+            }
+            Fst | Fstp => {
+                self.x87_get(V0, 0);
+                self.x87_set(V0, sti(insn.op0_register()));
+                if m == Fstp {
+                    self.x87_pop();
+                }
+            }
+            Fxch => {
+                let i = if insn.op_count() == 0 { 1 } else { sti(insn.op_register(insn.op_count() - 1)) };
+                self.x87_get(V0, 0);
+                self.x87_get(V1, i);
+                self.x87_set(V1, 0);
+                self.x87_set(V0, i);
+            }
+            Fist | Fistp | Fisttp => {
+                self.x87_get(V0, 0);
+                // NaN: interpreter (integer indefinite + IE)
+                self.a.fcmp_s(true, V0, V0);
+                cold.push(self.a.bcond_fixup(Cond::Vs));
+                if m == Fisttp {
+                    self.a.fcvtzs_x(true, T0, V0);
+                } else {
+                    // nearest (fcvtns, ties to even) or chop; up/down: interpreter
+                    self.a.ldr_imm(1, T2, XB, X87_CW);
+                    self.a.ubfx_w(T2, T2, 10, 2);
+                    let near = self.a.cbz_w_fixup(T2);
+                    self.a.subs_w_imm(XZR, T2, 3);
+                    cold.push(self.a.bcond_fixup(Cond::Ne));
+                    self.a.fcvtzs_x(true, T0, V0);
+                    let done = self.a.b_fixup();
+                    self.a.bind(near);
+                    self.a.fcvtns_x(true, T0, V0);
+                    self.a.bind(done);
+                }
+                // out of range: interpreter (integer indefinite + IE)
+                self.a.cmp_x_sxtw(T0, T0);
+                cold.push(self.a.bcond_fixup(Cond::Ne));
+                if msize == MemorySize::Int16 {
+                    self.a.sxth_w(T3, T0);
+                    self.a.cmp_w(T3, T0);
+                    cold.push(self.a.bcond_fixup(Cond::Ne));
+                    self.a.str_uxtw(1, T0, BASE, T4);
+                } else {
+                    self.a.str_uxtw(2, T0, BASE, T4);
+                }
+                if m != Fist {
+                    self.x87_pop();
+                }
+            }
+            _ => unreachable!(),
+        }
+        // Each special case re-runs the instruction in the interpreter (cold stub)
+        // and resumes after it.
+        let resume = self.a.pos();
+        for f in cold {
+            self.x87_cold(insn, f, resume);
+        }
+        Some(true)
+    }
+
     /// Close the current segment: one NaN check for all its float results.
     fn seg_end(&mut self) {
         let Some(seg) = self.seg.take() else { return };
@@ -1460,6 +1750,9 @@ impl Translator {
             return r;
         }
         self.seg_end();
+        if let Some(r) = self.x87(insn) {
+            return r;
+        }
         // Instructions with prefixes we do not model natively go to the interpreter.
         let lock_ok = matches!(m, Xadd | Cmpxchg)
             && size == 4
