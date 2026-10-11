@@ -1,6 +1,7 @@
 #include "log.h"
 
 #include <pthread.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <time.h>
@@ -9,9 +10,17 @@ int log_level = 1;
 static FILE *log_file;
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 
+// kill -USR1 <pid>: raise the log level to 3 (trace); kill -USR2: back to the start level.
+static int start_level = 1;
+static void on_usr1(int sig) { (void)sig; log_level = 3; }
+static void on_usr2(int sig) { (void)sig; log_level = start_level; }
+
 void log_init(void) {
     const char *lvl = getenv("DXH_LOG");
     if (lvl) log_level = atoi(lvl);
+    start_level = log_level;
+    signal(SIGUSR1, on_usr1);
+    signal(SIGUSR2, on_usr2);
     const char *path = getenv("DXH_LOG_FILE");
     log_file = path ? fopen(path, "w") : NULL;
     if (!log_file) log_file = stderr;
