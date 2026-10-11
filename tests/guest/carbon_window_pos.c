@@ -22,9 +22,6 @@ int main(void) {
     pr(w, "after move 0,0");
     RepositionWindow(w, w, kWindowCenterOnParentWindowScreen);
     pr(w, "after reposition");
-    HIRect av;
-    HIWindowGetAvailablePositioningBounds(CGMainDisplayID(), kHICoordSpace72DPIGlobal, &av);
-    printf("avail %g,%g %gx%g mbar %d\n", av.origin.x, av.origin.y, av.size.width, av.size.height, GetMBarHeight());
     CGRect db = CGDisplayBounds(CGMainDisplayID());
     printf("display %g x %g\n", db.size.width, db.size.height);
     return 0;

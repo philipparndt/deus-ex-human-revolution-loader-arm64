@@ -880,13 +880,11 @@ pub fn exec(eng: &mut Engine, st: &mut CpuState, insn: &Instruction) -> ExecResu
             let acc = st.gpr[EAX] & mask(size);
             let new = read_op(st, insn, 1);
             let mut swapped = false;
+            // The closure runs again when a locked CAS loses a race, so `swapped`
+            // must reflect the last attempt only.
             let old = rmw(st, insn, &mut |cur| {
-                if cur & mask(size) == acc {
-                    swapped = true;
-                    new
-                } else {
-                    cur
-                }
+                swapped = cur & mask(size) == acc;
+                if swapped { new } else { cur }
             });
             let (_, f) = sub_flags(size, acc, old, 0);
             set_flags(st, ARITH, f);
