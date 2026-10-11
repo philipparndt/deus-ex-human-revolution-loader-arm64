@@ -64,10 +64,18 @@ void runtime_preload_guest_libs(struct image **list, int *count) {
         LOGE("guest libstdc++ not found at %s; C++ guest code will fail", stdcxx);
         return;
     }
+    char fast[PATH_MAX];
+    snprintf(fast, sizeof fast, "%s/guest/libfast-i386.o", dir);
     g_preload_src = list;
     g_npreload_src = *count;
-    const char *paths[] = {stdcxx, unwind};
-    struct image *img = macho_load_objects("/usr/lib/libstdc++.6.dylib", paths, 2, preload_resolve);
+    // libfast first: its libc fast paths are exported in place of host thunks
+    // (DXH_NO_GUEST_FAST=1 disables them for comparison)
+    const char *paths[3];
+    int npaths = 0;
+    if (access(fast, R_OK) == 0 && !getenv("DXH_NO_GUEST_FAST")) paths[npaths++] = fast;
+    paths[npaths++] = stdcxx;
+    paths[npaths++] = unwind;
+    struct image *img = macho_load_objects("/usr/lib/libstdc++.6.dylib", paths, npaths, preload_resolve);
     if (!img) fatal("failed to link guest libstdc++");
     list[(*count)++] = img;
     macho_register(img);

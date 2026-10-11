@@ -22,7 +22,14 @@ ROSETTA_LDFLAGS := -arch x86_64 -Wl,-no_pie -Wl,-pagezero_size,0x1000 -Wl,-image
 	-framework Carbon -framework IOKit -framework CoreAudio -framework AudioToolbox -framework OpenAL \
 	-framework GameKit -framework StoreKit -framework AVFoundation -framework ScriptingBridge -lffi
 
-GUEST_LIBS := $(ROSETTA_DIR)/guest/libstdc++-i386.a $(ROSETTA_DIR)/guest/libunwind-i386.a
+GUEST_LIBS := $(ROSETTA_DIR)/guest/libstdc++-i386.a $(ROSETTA_DIR)/guest/libunwind-i386.a \
+	$(ROSETTA_DIR)/guest/libfast-i386.o
+
+# Guest-side fast paths for hot libc functions (no host crossing)
+GUEST_FAST_CFLAGS := -target i386-apple-macosx10.8 -O2 -ffreestanding -fno-builtin -fno-stack-protector
+%/guest/libfast-i386.o: src/guest/libfast/fast.c
+	@mkdir -p $(dir $@)
+	clang $(GUEST_FAST_CFLAGS) -c $< -o $@
 
 all: $(ROSETTA_DIR)/dxhost $(GUEST_LIBS)
 
@@ -65,7 +72,8 @@ NATIVE_LDFLAGS := -arch arm64 -L$(UNICORN)/lib -lunicorn -Wl,-rpath,$(UNICORN)/l
 	-framework CoreFoundation -framework Foundation -framework AppKit -framework OpenGL \
 	-framework Carbon -framework IOKit -framework CoreAudio -framework AudioToolbox -framework OpenAL \
 	-framework GameKit -framework StoreKit -framework AVFoundation -framework ScriptingBridge -lffi
-NATIVE_GUEST_LIBS := $(NATIVE_DIR)/guest/libstdc++-i386.a $(NATIVE_DIR)/guest/libunwind-i386.a
+NATIVE_GUEST_LIBS := $(NATIVE_DIR)/guest/libstdc++-i386.a $(NATIVE_DIR)/guest/libunwind-i386.a \
+	$(NATIVE_DIR)/guest/libfast-i386.o
 
 native: $(NATIVE_DIR)/dxhost $(NATIVE_GUEST_LIBS)
 
@@ -95,7 +103,8 @@ DXCPU_SRCS := $(filter-out src/host/cpu_rosetta.c src/host/cpu_unicorn.c,$(HOST_
 DXCPU_OBJS := $(patsubst src/%,$(DXCPU_DIR)/%.o,$(DXCPU_SRCS))
 DXCPU_FLAGS := -arch arm64 -DCPU_BACKEND_DXCPU
 
-native-dxcpu: $(DXCPU_DIR)/dxhost $(DXCPU_DIR)/guest/libstdc++-i386.a $(DXCPU_DIR)/guest/libunwind-i386.a
+native-dxcpu: $(DXCPU_DIR)/dxhost $(DXCPU_DIR)/guest/libstdc++-i386.a $(DXCPU_DIR)/guest/libunwind-i386.a \
+	$(DXCPU_DIR)/guest/libfast-i386.o
 
 $(DXCPU_LIB): $(wildcard src/cpu/src/*.rs) src/cpu/Cargo.toml
 	cd src/cpu && cargo build --release
