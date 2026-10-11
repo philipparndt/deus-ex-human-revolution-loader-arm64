@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
         [reader addOutput:vo];
         BOOL started = [reader startReading];
         printf("startReading %d status %ld\n", started, (long)[reader status]);
-        int frames = 0, audio_samples = 0, nonzero = 0;
+        int frames = 0, audio_samples = 0, nonzero = 0, fits = 0;
         for (int iter = 0; iter < 200 && frames < 30; iter++) {
             for (id o in outs) {
                 CMSampleBufferRef sb = [o copyNextSampleBuffer];
@@ -59,8 +59,12 @@ int main(int argc, char **argv) {
             if (img) {
                 CVPixelBufferLockBaseAddress(img, kCVPixelBufferLock_ReadOnly);
                 const unsigned char *p = CVPixelBufferGetBaseAddress(img);
-                size_t n = CVPixelBufferGetBytesPerRow(img) * CVPixelBufferGetHeight(img);
-                for (size_t i = 0; p && i < n; i += 997) if (p[i]) { nonzero++; break; }
+                size_t bpr = CVPixelBufferGetBytesPerRow(img), h = CVPixelBufferGetHeight(img);
+                size_t w = CVPixelBufferGetWidth(img), n = bpr * h;
+                // Feral copies only if bpr * height fits width * height * 2 ('2vuy')
+                if (n <= w * h * 2) fits++;
+                if (frames == 0) printf("frame %zux%zu bytesPerRow %zu\n", w, h, bpr);
+                for (size_t i = 0; p && i < bpr; i++) if (p[i]) { nonzero++; break; } // first row
                 CVPixelBufferUnlockBaseAddress(img, kCVPixelBufferLock_ReadOnly);
                 frames++;
             }
@@ -68,8 +72,9 @@ int main(int argc, char **argv) {
         }
         printf("video frames %d (with data %d), audio samples %d, status %ld %s\n", frames, nonzero, audio_samples,
                (long)[reader status], [[[reader error] description] UTF8String] ?: "");
-        printf("%s\n", frames > 0 && nonzero > 0 ? "PASS" : "FAIL");
-        int rc = frames > 0 && nonzero > 0 ? 0 : 1;
+        bool ok = frames > 0 && nonzero == frames && (getenv("DXH_NATIVE") || fits == frames);
+        printf("fits %d/%d\n%s\n", fits, frames, ok ? "PASS" : "FAIL");
+        int rc = ok ? 0 : 1;
         [pool release];
         return rc;
     }

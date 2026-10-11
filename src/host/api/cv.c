@@ -29,6 +29,7 @@ GDATA(kCVPixelBufferOpenGLCompatibilityKey, 4, init_gl_key);
 struct pbmirror {
     gaddr_t buf;
     uint32_t cap, size;
+    uint32_t guest_bpr, host_bpr, rows; // guest rows may be packed tighter than the host's
     int locks;
     CVPixelBufferLockFlags flags;
 };
@@ -50,9 +51,40 @@ static struct pbmirror *pb_mirror(CVPixelBufferRef pb) {
 THUNK(CVPixelBufferGetTypeID) { RET(CVPixelBufferGetTypeID()); }
 THUNK(CVPixelBufferGetWidth) { RET(CVPixelBufferGetWidth((CVPixelBufferRef)ARGCF(0))); }
 THUNK(CVPixelBufferGetHeight) { RET(CVPixelBufferGetHeight((CVPixelBufferRef)ARGCF(0))); }
-THUNK(CVPixelBufferGetBytesPerRow) { RET(CVPixelBufferGetBytesPerRow((CVPixelBufferRef)ARGCF(0))); }
+// Row stride as 2014's CoreVideo reported it: 16-byte aligned. Current versions
+// align to 64 bytes, and Feral's movie code only copies a frame if
+// bytesPerRow * height fits a width * height * 2 buffer (720-wide tutorials
+// were skipped and showed as green). The guest copy is packed accordingly.
+static uint32_t guest_bytes_per_row(CVPixelBufferRef pb) {
+    size_t host = CVPixelBufferGetBytesPerRow(pb);
+    if (CVPixelBufferIsPlanar(pb)) return (uint32_t)host;
+    void *base = CVPixelBufferGetBaseAddress(pb);
+    if (base && host_ptr_in_guest(base)) return (uint32_t)host; // guest memory: no packed copy
+    size_t w = CVPixelBufferGetWidth(pb);
+    uint32_t bits = 0;
+    CFDictionaryRef d = CVPixelFormatDescriptionCreateWithPixelFormatType(NULL, CVPixelBufferGetPixelFormatType(pb));
+    if (d) {
+        CFNumberRef bpb = CFDictionaryGetValue(d, kCVPixelFormatBitsPerBlock);
+        CFNumberRef bw = CFDictionaryGetValue(d, kCVPixelFormatBlockWidth);
+        int32_t b = 0, blk = 1;
+        if (bpb) CFNumberGetValue(bpb, kCFNumberSInt32Type, &b);
+        if (bw) CFNumberGetValue(bw, kCFNumberSInt32Type, &blk);
+        if (blk < 1) blk = 1;
+        bits = (uint32_t)(((w + blk - 1) / blk) * b);
+        CFRelease(d);
+    }
+    if (!bits) return (uint32_t)host;
+    uint32_t tight = ((bits + 7) / 8 + 15) & ~15u;
+    return tight < host ? tight : (uint32_t)host;
+}
+
+THUNK(CVPixelBufferGetBytesPerRow) { RET(guest_bytes_per_row((CVPixelBufferRef)ARGCF(0))); }
 THUNK(CVPixelBufferGetPixelFormatType) { RET(CVPixelBufferGetPixelFormatType((CVPixelBufferRef)ARGCF(0))); }
-THUNK(CVPixelBufferGetDataSize) { RET(CVPixelBufferGetDataSize((CVPixelBufferRef)ARGCF(0))); }
+THUNK(CVPixelBufferGetDataSize) {
+    CVPixelBufferRef pb = (CVPixelBufferRef)ARGCF(0);
+    if (CVPixelBufferIsPlanar(pb)) RET(CVPixelBufferGetDataSize(pb));
+    RET(guest_bytes_per_row(pb) * (uint32_t)CVPixelBufferGetHeight(pb));
+}
 THUNK(CVPixelBufferIsPlanar) { RET_BOOL(CVPixelBufferIsPlanar((CVPixelBufferRef)ARGCF(0))); }
 
 static uint32_t pb_size(CVPixelBufferRef pb) {
@@ -72,6 +104,10 @@ THUNK(CVPixelBufferLockBaseAddress) {
         // The mirror only lives while locked (the guest may only use the base
         // address then); movie frames would otherwise pin guest memory per buffer.
         uint32_t size = pb_size(pb);
+        m->host_bpr = (uint32_t)CVPixelBufferGetBytesPerRow(pb);
+        m->guest_bpr = guest_bytes_per_row(pb);
+        m->rows = (uint32_t)CVPixelBufferGetHeight(pb);
+        if (m->guest_bpr < m->host_bpr) size = m->guest_bpr * m->rows;
         m->buf = gheap_alloc(size);
         if (!m->buf) {
             LOGE("cv: out of guest memory for a %u byte pixel buffer", size);
@@ -81,7 +117,12 @@ THUNK(CVPixelBufferLockBaseAddress) {
         }
         m->cap = m->size = size;
         m->flags = ARG(1);
-        memcpy(g2h(m->buf), base, size);
+        if (m->guest_bpr < m->host_bpr) {
+            for (uint32_t y = 0; y < m->rows; y++)
+                memcpy((uint8_t *)g2h(m->buf) + y * m->guest_bpr, (uint8_t *)base + y * m->host_bpr, m->guest_bpr);
+        } else {
+            memcpy(g2h(m->buf), base, size);
+        }
     }
     RET(rc);
 }
@@ -92,7 +133,14 @@ THUNK(CVPixelBufferUnlockBaseAddress) {
     void *base = CVPixelBufferGetBaseAddress(pb);
     if (m->locks > 0 && --m->locks == 0 && base && !host_ptr_in_guest(base) && m->buf &&
         !(m->flags & kCVPixelBufferLock_ReadOnly))
-        memcpy(base, g2h(m->buf), m->size); // write back guest modifications
+    {
+        if (m->guest_bpr < m->host_bpr) {
+            for (uint32_t y = 0; y < m->rows; y++)
+                memcpy((uint8_t *)base + y * m->host_bpr, (uint8_t *)g2h(m->buf) + y * m->guest_bpr, m->guest_bpr);
+        } else {
+            memcpy(base, g2h(m->buf), m->size); // write back guest modifications
+        }
+    }
     if (m->locks == 0 && m->buf) {
         gheap_free(m->buf);
         m->buf = 0;
