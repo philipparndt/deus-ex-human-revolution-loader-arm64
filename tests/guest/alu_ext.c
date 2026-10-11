@@ -896,6 +896,20 @@ static void t_bt(uint32_t v, uint32_t n) {
     __asm__ volatile("addl $0, %2; btl $31, %2; setc %b0; setz %b1" : "=q"(cc), "=q"(z2) : "r"(v) : "cc");
     mix(cc & 1); mix(z2 & 1);
 }
+/* x86 allows locked operations on unaligned addresses (ARM LSE atomics do not). */
+static void t_unaligned(uint32_t a, uint32_t b) {
+    static uint8_t buf[64] __attribute__((aligned(16)));
+    for (int off = 11; off < 18; off++) { /* 13..15 cross a 16-byte boundary */
+        volatile uint32_t *p = (volatile uint32_t *)(buf + off);
+        *p = a;
+        uint32_t r = b, e = a, fl;
+        __asm__ volatile("lock xaddl %0, %1; pushf; pop %2" : "+r"(r), "+m"(*p), "=r"(fl) : : "cc");
+        mix(r); mix(*p); mix(fl & DEF);
+        __asm__ volatile("lock cmpxchgl %3, %1; pushf; pop %2" : "+a"(e), "+m"(*p), "=r"(fl) : "r"(b) : "cc");
+        mix(e); mix(*p); mix(fl & 0x40);
+    }
+}
+
 int main(void) {
     for (unsigned i = 0; i < NV; i++)
         for (unsigned j = 0; j < NV; j++) {
@@ -926,6 +940,7 @@ int main(void) {
             t_xadd(a, b);
             cat = 4;
             t_cmpxchg(a, b, c); t_cmpxchg(a, a, c);
+            t_unaligned(a, b);
             cat = 5;
             t_shldl_0(a, b);
             t_shldl_1(a, b);

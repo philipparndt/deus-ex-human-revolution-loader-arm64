@@ -1681,33 +1681,43 @@ impl Translator {
                 self.a.rorv_w(T0, T0, T1);
                 self.store(insn, T0, true);
             }
-            // atomic on ARM via LSE (also without lock: one location, same result)
-            Xadd if size == 4 && insn.op0_kind() == OpKind::Memory && insn.op1_kind() == OpKind::Register => {
+            // atomic on ARM via LSE (also without lock: one location, same result).
+            // LSE atomics fault on unaligned addresses (x86 allows them): those
+            // go to the interpreter. Both paths leave the flags in ctx.
+            Xadd | Cmpxchg if size == 4 && insn.op0_kind() == OpKind::Memory && insn.op1_kind() == OpKind::Register => {
                 let src = gr(insn.op1_register());
+                self.flush_flags();
+                self.xmm_spill();
                 self.ea(insn);
+                self.a.mov_w_imm(T3, 3);
+                self.a.tst_w(T4, T3);
+                let unaligned = self.a.bcond_fixup(Cond::Ne);
                 self.a.add_x(T5, BASE, T4);
-                self.a.ldaddal_w(src, T0, T5); // T0 = old
-                self.set_add_flags(flags_live, T0, src);
-                self.a.mov_w(src, T0);
-            }
-            Cmpxchg if size == 4 && insn.op0_kind() == OpKind::Memory && insn.op1_kind() == OpKind::Register => {
-                // EAX gets the old value either way (equal: it already holds it); flags = cmp eax, old
-                let src = gr(insn.op1_register());
-                self.ea(insn);
-                self.a.add_x(T5, BASE, T4);
-                self.a.mov_w(T0, G[EAX]);
-                self.a.casal_w(T0, src, T5); // T0 = old
-                if flags_live {
-                    self.a.mov_w(FA, G[EAX]);
-                    self.a.mov_w(FB, T0);
-                    self.a.subs_w(FR, FA, FB);
-                    self.nzcv = Some(FlagSrc { kind: K_SUB, size: 4 });
-                    self.dirty = true;
+                if m == Xadd {
+                    self.a.ldaddal_w(src, T0, T5); // T0 = old
+                    self.set_add_flags(flags_live, T0, src);
+                    self.a.mov_w(src, T0);
                 } else {
-                    self.nzcv = None;
-                    self.dirty = false;
+                    // EAX gets the old value either way (equal: it already holds it); flags = cmp eax, old
+                    self.a.mov_w(T0, G[EAX]);
+                    self.a.casal_w(T0, src, T5); // T0 = old
+                    if flags_live {
+                        self.a.mov_w(FA, G[EAX]);
+                        self.a.mov_w(FB, T0);
+                        self.a.subs_w(FR, FA, FB);
+                        self.nzcv = Some(FlagSrc { kind: K_SUB, size: 4 });
+                        self.dirty = true;
+                    }
+                    self.a.mov_w(G[EAX], T0);
                 }
-                self.a.mov_w(G[EAX], T0);
+                self.flush_flags();
+                let done = self.a.b_fixup();
+                self.a.bind(unaligned);
+                let cont = self.fallback(insn);
+                debug_assert!(cont);
+                self.a.bind(done);
+                self.nzcv = None;
+                self.dirty = false;
             }
             Adc | Sbb if size == 4 => {
                 self.cf_to_fc();

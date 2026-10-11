@@ -6,6 +6,8 @@
 //
 // Drawable attachment (CGLSetSurface, NSOpenGLContext views, AGL) is not done
 // here; without a drawable the context renders into FBOs only.
+#include <stdlib.h>
+#include <time.h>
 #include "gl_internal.h"
 
 #include <stdlib.h>
@@ -276,7 +278,44 @@ void cgl_retake_held_locks(void) {
 }
 THUNK(CGLUpdateContext) { RET(CGLUpdateContext(CTX(0))); }
 
-THUNK(CGLFlushDrawable) { RET(CGLFlushDrawable(CTX(0))); }
+// DXH_FPS=<seconds>: frame statistics (frames/s, worst frame, frames over 33 ms,
+// time spent inside the flush) from the presented frames.
+static void fps_frame(uint64_t flush_ns) {
+    static int interval = -1;
+    static uint64_t last, window_start, worst, in_flush;
+    static unsigned frames, slow;
+    if (interval < 0) {
+        const char *e = getenv("DXH_FPS");
+        interval = e ? atoi(e) : 0;
+    }
+    if (!interval) return;
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (last) {
+        uint64_t dt = now - last;
+        if (dt > worst) worst = dt;
+        if (dt > 33000000) slow++;
+    } else {
+        window_start = now;
+    }
+    last = now;
+    frames++;
+    in_flush += flush_ns;
+    if (now - window_start >= (uint64_t)interval * 1000000000ull) {
+        double secs = (now - window_start) / 1e9;
+        LOGI("fps: %.1f frames/s, worst %.1f ms, %u frames > 33 ms, %.1f ms/frame in flush", frames / secs,
+             worst / 1e6, slow, frames ? in_flush / 1e6 / frames : 0);
+        window_start = now;
+        frames = slow = 0;
+        worst = in_flush = 0;
+    }
+}
+
+THUNK(CGLFlushDrawable) {
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    CGLError e = CGLFlushDrawable(CTX(0));
+    fps_frame(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0);
+    RET(e);
+}
 THUNK(CGLClearDrawable) { RET(CGLClearDrawable(CTX(0))); }
 
 THUNK(CGLEnable) {

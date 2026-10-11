@@ -661,7 +661,21 @@ THUNK(HIWindowFindAtLocation) {
     CGPoint p = CGPointMake(greadf(ARG(0)), greadf(ARG(0) + 4));
     __block CBWindow *w = nil;
     cb_on_main(^{
-      NSInteger num = [NSWindow windowNumberAtPoint:cb_global_to_ns(p) belowWindowWithWindowNumber:0];
+      NSPoint np = cb_global_to_ns(p);
+      if (NSApp.isActive) {
+          // The game asks every frame (mouse handling); windowNumberAtPoint is a
+          // synchronous WindowServer round trip of several ms. While active, our
+          // windows are in front: hit-test them locally, key window first.
+          NSWindow *key = NSApp.keyWindow;
+          if (key.isVisible && NSPointInRect(np, key.frame)) {
+              w = cb_window_for_ns(key);
+              if (w) return;
+          }
+          for (NSWindow *nw in NSApp.orderedWindows)
+              if (nw.isVisible && NSPointInRect(np, nw.frame) && (w = cb_window_for_ns(nw))) return;
+          return;
+      }
+      NSInteger num = [NSWindow windowNumberAtPoint:np belowWindowWithWindowNumber:0];
       w = cb_window_for_ns([NSApp windowWithWindowNumber:num]);
     });
     if (ARG(4)) gwrite32(ARG(4), cb_handle(w));
