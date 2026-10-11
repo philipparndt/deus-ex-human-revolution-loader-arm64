@@ -7,3 +7,5 @@ __pycache__/
 experiments/rosetta32/test32
 *.log
 src/cpu/target/
+docs/analysis/*
+!docs/analysis/README.md
