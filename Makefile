@@ -18,7 +18,8 @@ ROSETTA_FLAGS := -arch x86_64 -DCPU_BACKEND_ROSETTA
 ROSETTA_LDFLAGS := -arch x86_64 -Wl,-no_pie -Wl,-pagezero_size,0x1000 -Wl,-image_base,0x200000000 \
 	-Wl,-segaddr,__GUEST,0x4000 -Wl,-segprot,__GUEST,rwx,rwx \
 	-framework CoreFoundation -framework Foundation -framework AppKit -framework OpenGL \
-	-framework Carbon -framework IOKit -framework CoreAudio -framework AudioToolbox -framework OpenAL
+	-framework Carbon -framework IOKit -framework CoreAudio -framework AudioToolbox -framework OpenAL \
+	-framework GameKit -framework StoreKit -framework AVFoundation -framework ScriptingBridge -lffi
 
 GUEST_LIBS := $(ROSETTA_DIR)/guest/libstdc++-i386.a $(ROSETTA_DIR)/guest/libunwind-i386.a
 
@@ -47,7 +48,7 @@ $(ROSETTA_DIR)/%.c.o: src/%.c $(wildcard src/host/*.h) $(wildcard src/host/api/*
 
 $(ROSETTA_DIR)/%.m.o: src/%.m $(wildcard src/host/*.h) $(wildcard src/host/api/*.h)
 	@mkdir -p $(dir $@)
-	$(CC) $(ROSETTA_FLAGS) $(CFLAGS) -fobjc-arc -c $< -o $@
+	$(CC) $(ROSETTA_FLAGS) $(CFLAGS) -fno-objc-arc -Wno-deprecated-declarations -c $< -o $@
 
 $(ROSETTA_DIR)/%.S.o: src/%.S
 	@mkdir -p $(dir $@)

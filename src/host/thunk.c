@@ -65,6 +65,13 @@ void thunks_init(void) {
 
 gaddr_t hostsym_lookup(const char *name) {
     uint64_t v;
+    // .objc_class_name_* are link-time markers of the fragile ObjC ABI; their
+    // values are never used at run time.
+    if (strncmp(name, ".objc_class_name_", 17) == 0) {
+        static gaddr_t marker;
+        if (!marker) marker = gheap_calloc(1, 16);
+        return marker;
+    }
     return strmap_get(&symbols, name, &v) ? (gaddr_t)v : 0;
 }
 

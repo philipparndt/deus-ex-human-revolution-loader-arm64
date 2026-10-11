@@ -10,6 +10,8 @@
 #include "runtime.h"
 #include "thunk.h"
 
+void objc_bridge_register_images(void);
+
 #include <libgen.h>
 #include <limits.h>
 #include <mach-o/loader.h>
@@ -153,6 +155,7 @@ static int run_test_objects(int n, char **paths) {
     nloaded++;
     macho_register(img);
     runtime_images_loaded(loaded, nloaded);
+    objc_bridge_register_images();
     gaddr_t stack_lo = gmem_map_anywhere(MAIN_STACK_SIZE, GPROT_RW, 0);
     char *targv[] = {paths[0], NULL};
     gaddr_t sp = build_stack(stack_lo + MAIN_STACK_SIZE, 1, targv, paths[0]);
@@ -205,6 +208,7 @@ int main(int argc, char **argv) {
 
     for (int i = 0; i < nloaded; i++) macho_link(loaded[i], resolve_symbol);
     runtime_images_loaded(loaded, nloaded);
+    objc_bridge_register_images();
 
     gaddr_t stack_lo = gmem_map_anywhere(MAIN_STACK_SIZE, GPROT_RW, 0);
     if (!stack_lo) fatal("no memory for the main stack");
