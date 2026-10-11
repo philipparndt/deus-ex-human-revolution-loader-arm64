@@ -2,3 +2,8 @@ games/
 build/
 .DS_Store
 third_party/*/
+__pycache__/
+*.pyc
+experiments/rosetta32/test32
+*.log
+src/cpu/target/
