@@ -705,6 +705,10 @@ static NSButton *button(NSString *t, NSButtonType type, NSBezelStyle bezel) {
     [b setButtonType:type];
     [b setBezelStyle:bezel];
     [b setTitle:t ? t : @""];
+    // Carbon buttons/checkboxes are single-line; AppKit would wrap long titles
+    [[b cell] setWraps:NO];
+    [[b cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+    [b setUsesSingleLineMode:YES];
     return b;
 }
 
