@@ -32,10 +32,13 @@ Work in progress, but the game is playable:
 - Steam: the 2014 `libsteam_api` is bridged to the current 64-bit Steam client
   (ownership check, achievements, cloud saves)
 - localization (e.g. German) via Steam's language setting
+- runs natively on arm64 with the own JIT (`make native-dxcpu`), from the
+  launcher through gameplay; the Rosetta build remains as reference
 
-Known issues: occasional stutter (graphics path not optimized yet; a Metal
-renderer is planned), antialiasing options, and the native arm64 backend is
-being brought up for the full game (all test suites pass on it).
+Known issues: frame drops while the game streams in new areas (driver stalls
+on its worker GL contexts), rendering at the "looks like" resolution of a
+Retina display (no native 4K yet), antialiasing options unverified, and the
+native core does not order memory like x86 unless `DXCPU_TSO=1` is set.
 
 ## How it works
 
@@ -76,8 +79,23 @@ Useful environment variables:
 | --- | --- |
 | `DXH_LOG=0..3`, `DXH_LOG_FILE=path` | log level (3 = trace every host call) and log file; `kill -USR1/-USR2 <pid>` toggles tracing at runtime |
 | `DXH_LANGUAGE=german` | override the game language |
-| `DXH_THUNK_STATS=10`, `DXH_GL_STATS=1` | periodic performance statistics |
-| `DXCPU_INTERP=1` | interpreter instead of JIT (debugging) |
+| `DXH_FPS=5` | frames/s, worst frame and frames over 33 ms every 5 s |
+| `DXH_SLOW_MS=10` | log every host call slower than 10 ms (frame spikes), except calls that are meant to wait |
+| `DXH_THUNK_STATS=10`, `DXH_GL_STATS=1` | periodic host call / buffer mapping statistics |
+| `DXH_WATCHDOG=10` | if the main thread hangs for 10 s, log every guest thread's host call and guest frames |
+| `DXH_GL_REALMAP=1` | map write-only GL buffers in the driver again (default: upload written ranges, no GPU wait) |
+| `DXH_WINDUMP=1` | log all windows' visibility after window operations |
+| `DXH_NO_PATCHES=1` | do not apply the game fixes in `src/host/patches.c` |
+
+Native CPU core (`build/arm64-dxcpu`):
+
+| Variable | Effect |
+| --- | --- |
+| `DXCPU_TSO=1` | x86 memory ordering (barriers around guest loads/stores, stack excepted): rules out the reordering `tests/guest/litmus.c` shows, ~10% slower |
+| `DXCPU_STATS=10` | every 10 s: dispatcher entries and the most interpreted instructions; `DXCPU_STATS_ADDR=Mnemonic` adds the addresses |
+| `DXCPU_VERIFY=1` | run every block in the interpreter as well and report blocks whose results differ (slow; shared-memory races show up as noise) |
+| `DXCPU_JIT_OFF=sse,fast,int,x87,all,m:Add+Shl` | interpret selected instruction groups (bisecting translation bugs) |
+| `DXCPU_INTERP=1` | interpreter only |
 
 ## Tests
 
@@ -85,6 +103,11 @@ Useful environment variables:
 tests/guest/build.sh tests/guest/libc_file.c build/t/libc_file.o
 build/arm64-dxcpu/dxhost --test build/t/libc_file.o
 ```
+
+Several tests print a hash of their results so the backends can be compared
+with real x86 through the Rosetta build: `alu_ext`, `shift_flags`, `sse_nan`,
+`x87_ops`. They must print the same hash on `build/x86_64` and
+`build/arm64-dxcpu` (also with `DXCPU_INTERP=1`).
 
 ## Legal
 
