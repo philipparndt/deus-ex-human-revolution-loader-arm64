@@ -55,6 +55,7 @@ int main(void) {
 
     mach_timebase_info_data_t tbi = {0, 0};
     CHECK(mach_timebase_info(&tbi) == 0 && tbi.numer > 0 && tbi.denom > 0, "mach_timebase_info");
+    CHECK(tbi.numer == 1 && tbi.denom == 1, "Intel timebase 1/1 (got %u/%u)", tbi.numer, tbi.denom);
     uint64_t a = mach_absolute_time();
     struct timespec req = {0, 20 * 1000 * 1000}, rem;
     CHECK(nanosleep(&req, &rem) == 0, "nanosleep");

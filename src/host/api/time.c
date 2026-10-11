@@ -228,14 +228,19 @@ THUNK(clock_getres) {
     RET(rc);
 }
 
-THUNK(mach_absolute_time) { RET64(mach_absolute_time()); }
-THUNK(mach_timebase_info) {
-    mach_timebase_info_data_t tb;
-    kern_return_t kr = mach_timebase_info(&tb);
-    if (kr == KERN_SUCCESS) {
-        gwrite32(ARG(0), tb.numer);
-        gwrite32(ARG(0) + 4, tb.denom);
-    }
-    RET(kr);
+// The guest sees Intel Mac absolute time: 1 tick = 1 ns, timebase 1/1. Games of
+// that era assume it (arm64 hosts tick at 24 MHz, timebase 125/3), and Rosetta
+// presents the same to x86 code.
+uint64_t guest_abs_time(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+uint64_t guest_abs_to_host(uint64_t ns) {
+    static mach_timebase_info_data_t tb;
+    if (!tb.denom) mach_timebase_info(&tb);
+    return (uint64_t)((__uint128_t)ns * tb.denom / tb.numer);
 }
-THUNK(mach_wait_until) { RET(mach_wait_until(ARG64(0))); }
+THUNK(mach_absolute_time) { RET64(guest_abs_time()); }
+THUNK(mach_timebase_info) {
+    gwrite32(ARG(0), 1);
+    gwrite32(ARG(0) + 4, 1);
+    RET(KERN_SUCCESS);
+}
+THUNK(mach_wait_until) { RET(mach_wait_until(guest_abs_to_host(ARG64(0)))); }

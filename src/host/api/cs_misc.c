@@ -106,25 +106,14 @@ THUNK(Microseconds) {
     gwrite32(ARG(0) + 4, w.hi);
 }
 
-THUNK(UpTime) {
-    AbsoluteTime t = UpTime();
-    RET64((uint64_t)t.hi << 32 | t.lo);
-}
-
-THUNK(AbsoluteToNanoseconds) {
-    AbsoluteTime t = {.lo = ARG(0), .hi = ARG(1)};
-    Nanoseconds n = AbsoluteToNanoseconds(t);
-    RET64((uint64_t)n.hi << 32 | n.lo);
-}
-
-THUNK(NanosecondsToAbsolute) {
-    Nanoseconds n = {.lo = ARG(0), .hi = ARG(1)};
-    AbsoluteTime t = NanosecondsToAbsolute(n);
-    RET64((uint64_t)t.hi << 32 | t.lo);
-}
-
+// AbsoluteTime is guest absolute time, i.e. nanoseconds (see time.c).
+extern uint64_t guest_abs_time(void), guest_abs_to_host(uint64_t ns);
+THUNK(UpTime) { RET64(guest_abs_time()); }
+THUNK(AbsoluteToNanoseconds) { RET64(ARG64(0)); }
+THUNK(NanosecondsToAbsolute) { RET64(ARG64(0)); }
 THUNK(AbsoluteToDuration) {
-    AbsoluteTime t = {.lo = ARG(0), .hi = ARG(1)};
+    uint64_t h = guest_abs_to_host(ARG64(0));
+    AbsoluteTime t = {.lo = (uint32_t)h, .hi = (uint32_t)(h >> 32)};
     RET((uint32_t)AbsoluteToDuration(t));
 }
 
@@ -133,9 +122,7 @@ THUNK(Delay) {
     uint32_t ticks = ARG(0);
     if (ticks) usleep((useconds_t)((uint64_t)ticks * 1000000 / 60));
     if (ARG(1)) {
-        AbsoluteTime t = UpTime();
-        Nanoseconds n = AbsoluteToNanoseconds(t);
-        uint64_t ns = (uint64_t)n.hi << 32 | n.lo;
+        uint64_t ns = guest_abs_time();
         gwrite32(ARG(1), (uint32_t)(ns * 60 / 1000000000ull));
     }
 }

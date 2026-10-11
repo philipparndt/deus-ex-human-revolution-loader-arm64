@@ -1090,6 +1090,10 @@ fn is_string_form(insn: &Instruction) -> bool {
 
 fn host_ticks() -> u64 {
     use std::time::Instant;
-    thread_local!(static START: Instant = Instant::now());
-    START.with(|s| s.elapsed().as_nanos() as u64 * 3) // ~3 GHz nominal
+    // One epoch for the whole process: the TSC is a machine-wide clock and games
+    // compare readings taken on different threads.
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    // 2.4 GHz: the clock rate the host reports to the guest (hw.cpufrequency and
+    // Gestalt fall back to 2.4 GHz on Apple Silicon, src/host/api/sys.c).
+    START.get_or_init(Instant::now).elapsed().as_nanos() as u64 * 12 / 5
 }

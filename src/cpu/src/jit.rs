@@ -170,6 +170,54 @@ pub static STATS_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 pub static FALLBACK_COUNT: [std::sync::atomic::AtomicU64; 2048] = [const { std::sync::atomic::AtomicU64::new(0) }; 2048];
 pub static DISPATCH_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+// Debugging aid: DXCPU_JIT_OFF=sse,fast,int,all sends those instruction groups
+// to the interpreter (bisecting translation bugs against the interpreter).
+const OFF_SSE: u32 = 1;
+const OFF_FAST: u32 = 2;
+const OFF_INT: u32 = 4;
+const OFF_ALL: u32 = 8;
+/// DXCPU_VERIFY=1: run every block in the interpreter first (memory writes
+/// undone), then translated, and report blocks whose results differ. Blocks are
+/// neither chained nor looped internally in this mode, so one run_once = one block.
+pub fn verify_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var_os("DXCPU_VERIFY").is_some();
+        if on {
+            mem::UNDO_ON.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        on
+    })
+}
+
+// DXCPU_JIT_OFF=m:Add+Sub+Shl interprets just those mnemonics.
+fn jit_off_mnemonic(m: Mnemonic) -> bool {
+    static SET: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let set = SET.get_or_init(|| {
+        let v = std::env::var("DXCPU_JIT_OFF").unwrap_or_default();
+        v.split(',')
+            .filter_map(|w| w.trim().strip_prefix("m:"))
+            .flat_map(|l| l.split('+').map(|x| x.to_string()).collect::<Vec<_>>())
+            .collect()
+    });
+    !set.is_empty() && set.iter().any(|n| *n == format!("{:?}", m))
+}
+fn jit_off() -> u32 {
+    static OFF: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| {
+        let v = std::env::var("DXCPU_JIT_OFF").unwrap_or_default();
+        v.split(',')
+            .map(|w| match w.trim() {
+                "sse" => OFF_SSE,
+                "fast" => OFF_FAST,
+                "int" => OFF_INT,
+                "all" => OFF_ALL,
+                _ => 0,
+            })
+            .fold(0, |a, b| a | b)
+    })
+}
+
 extern "C" fn helper_interp(ctx: *mut JitCtx, insn: *const Instruction) -> u32 {
     let ctx = unsafe { &mut *ctx };
     let insn = unsafe { &*insn };
@@ -273,7 +321,7 @@ impl Jit {
         }
     }
 
-    fn decode(&self, eip: u32) -> Vec<Instruction> {
+    pub(crate) fn decode(&self, eip: u32) -> Vec<Instruction> {
         let mut out = Vec::new();
         let mut ip = eip;
         while out.len() < 96 {
@@ -323,6 +371,10 @@ impl Jit {
                 }
             }
         }
+        let self_loop = self_loop && !verify_on();
+        if !self_loop {
+            loop_regs = 0;
+        }
         let loop_cf = self_loop && insns.iter().any(|i| matches!(i.mnemonic(), Mnemonic::Inc | Mnemonic::Dec));
         t.begin(eip, loop_regs, loop_cf);
         for (i, insn) in insns.iter().enumerate() {
@@ -356,6 +408,9 @@ impl Jit {
             if target >= self.stub_lo && target < self.stub_hi {
                 continue; // stubs always go through the dispatcher
             }
+            if verify_on() {
+                continue; // every block returns to the dispatcher
+            }
             if let Some(&tp) = self.blocks.get(&target) {
                 self.link(at, tp);
             } else {
@@ -364,7 +419,7 @@ impl Jit {
         }
         self.blocks.insert(eip, p);
         self.translated += 1;
-        if let Some(waiters) = self.unlinked.remove(&eip) {
+        if let Some(waiters) = self.unlinked.remove(&eip).filter(|_| !verify_on()) {
             for at in waiters {
                 self.link(at, p);
             }
@@ -1210,6 +1265,11 @@ impl Translator {
         use Mnemonic::*;
         let m = insn.mnemonic();
         let size = if insn.op_count() > 0 { interp::op_size(insn, 0) } else { 4 };
+        let off = jit_off();
+        if off & OFF_ALL != 0 {
+            self.seg_end();
+            return self.fallback(insn);
+        }
         let cand = Self::seg_candidate(insn);
         if !cand {
             self.seg_end();
@@ -1239,7 +1299,10 @@ impl Translator {
                 _ => return self.fallback(insn),
             }
         }
-        if self.fast_path(insn, m, size, flags_live) {
+        if (off & OFF_INT != 0 || jit_off_mnemonic(m)) && insn.flow_control() == FlowControl::Next {
+            return self.fallback(insn);
+        }
+        if off & OFF_FAST == 0 && self.fast_path(insn, m, size, flags_live) {
             return true;
         }
         match m {
@@ -1624,6 +1687,9 @@ impl Translator {
     /// Translate an SSE instruction natively. None: not handled here (the
     /// caller falls back to the interpreter); Some(cont) otherwise.
     fn sse(&mut self, insn: &Instruction, flags_live: bool) -> Option<bool> {
+        if jit_off() & OFF_SSE != 0 {
+            return None;
+        }
         use Mnemonic::*;
         let m = insn.mnemonic();
         let n = insn.op_count();
@@ -2370,7 +2436,113 @@ pub fn mxcsr_native(mxcsr: u32) -> bool {
     mxcsr & !0x3f == 0x1f80
 }
 
+/// Interpreter result of one block for the verifier.
+struct Expected {
+    eip0: u32,
+    insns: Vec<Instruction>,
+    st0: CpuState,
+    st: CpuState,
+    written: Vec<(u32, u8)>,
+}
+
+fn verify_compare(ctx: &mut JitCtx, e: &Expected) {
+    ctx.materialize();
+    let st = unsafe { &*ctx.state };
+    let mut diffs = Vec::new();
+    const NAMES: [&str; 8] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+    for i in 0..8 {
+        if ctx.gpr[i] != e.st.gpr[i] {
+            diffs.push(format!("{} jit={:#x} interp={:#x}", NAMES[i], ctx.gpr[i], e.st.gpr[i]));
+        }
+    }
+    if ctx.eip != e.st.eip {
+        diffs.push(format!("eip jit={:#x} interp={:#x}", ctx.eip, e.st.eip));
+    }
+    // Flags are not compared: translated blocks drop flags that are dead at the
+    // exit, and a wrong flag inside the block shows up as a wrong eip.
+    for i in 0..8 {
+        if st.xmm[i] != e.st.xmm[i] {
+            diffs.push(format!("xmm{} jit={:02x?} interp={:02x?}", i, st.xmm[i], e.st.xmm[i]));
+        }
+    }
+    let mut bad_mem = 0;
+    for &(a, v) in &e.written {
+        let now = mem::r8(a);
+        if now != v {
+            if bad_mem < 8 {
+                diffs.push(format!("mem[{:#x}] jit={:#04x} interp={:#04x}", a, now, v));
+            }
+            bad_mem += 1;
+        }
+    }
+    if diffs.is_empty() {
+        return;
+    }
+    static REPORTED: std::sync::Mutex<Option<std::collections::HashSet<u32>>> = std::sync::Mutex::new(None);
+    {
+        let mut r = REPORTED.lock().unwrap();
+        let set = r.get_or_insert_with(Default::default);
+        if set.len() >= 64 || !set.insert(e.eip0) {
+            return;
+        }
+    }
+    let mut fmt = iced_x86::IntelFormatter::new();
+    use iced_x86::Formatter;
+    let mut out = format!("dxcpu verify: block {:#x} differs ({} bad bytes): {}\n", e.eip0, bad_mem, diffs.join(", "));
+    out += &format!(
+        "  in: eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esp={:#x} ebp={:#x} esi={:#x} edi={:#x} eflags={:#x}\n",
+        e.st0.gpr[0], e.st0.gpr[1], e.st0.gpr[2], e.st0.gpr[3], e.st0.gpr[4], e.st0.gpr[5], e.st0.gpr[6], e.st0.gpr[7], e.st0.eflags
+    );
+    for insn in &e.insns {
+        let mut t = String::new();
+        fmt.format(insn, &mut t);
+        out += &format!("  {:08x}  {}\n", insn.ip32(), t);
+    }
+    eprint!("{}", out);
+}
+
 impl JitEngine {
+    /// Run the block at ctx.eip in the interpreter on a copy of the state,
+    /// then undo its memory writes (see verify_on).
+    fn verify_interp(&mut self, ctx: &mut JitCtx) -> Option<Expected> {
+        ctx.materialize();
+        let mut st = unsafe { *ctx.state };
+        st.gpr = ctx.gpr;
+        st.eip = ctx.eip;
+        st.eflags = ctx.eflags;
+        let st0 = st;
+        let insns = self.jit.decode(ctx.eip);
+        // Running a locked instruction twice (interpreter, then translated) would let
+        // other threads see and lose the interpreter's temporary value.
+        if insns.iter().any(|i| {
+            i.has_lock_prefix() || (i.mnemonic() == Mnemonic::Xchg && i.op_count() == 2 && (i.op0_kind() == OpKind::Memory || i.op1_kind() == OpKind::Memory))
+        }) {
+            return None;
+        }
+        mem::undo_begin();
+        let mut ok = true;
+        for insn in &insns {
+            match interp::exec(&mut self.interp, &mut st, insn) {
+                Ok(Step::Next) => {
+                    st.eip = insn.next_ip32();
+                    if matches!(insn.mnemonic(), Mnemonic::Ldmxcsr | Mnemonic::Fxrstor | Mnemonic::Xrstor) {
+                        break;
+                    }
+                }
+                Ok(Step::Jump) => break,
+                Err(_) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        let written = mem::undo_rollback();
+        if !ok {
+            return None;
+        }
+        Some(Expected { eip0: st0.eip, insns, st0, st, written })
+    }
+
     pub fn new(stub_lo: u32, stub_hi: u32) -> Self {
         JitEngine { jit: Jit::new(stub_lo, stub_hi), jit_nd: None, interp: Box::new(Engine::new(stub_lo, stub_hi)) }
     }
@@ -2392,12 +2564,19 @@ impl JitEngine {
             }
             // MXCSR only changes through interpreted instructions that end their block
             // (ldmxcsr, fxrstor) or host code between runs, so checking here suffices.
-            let r = if mxcsr_native(unsafe { (*ctx.state).mxcsr }) {
+            let native = mxcsr_native(unsafe { (*ctx.state).mxcsr });
+            let expect = if verify_on() { self.verify_interp(&mut ctx) } else { None };
+            let r = if native {
                 self.jit.run_once(&mut ctx)
             } else {
                 let (lo, hi) = (self.jit.stub_lo, self.jit.stub_hi);
                 self.jit_nd.get_or_insert_with(|| Box::new(Jit::with_mode(lo, hi, false))).run_once(&mut ctx)
             };
+            if let Some(e) = expect {
+                if r != EXIT_FAULT {
+                    verify_compare(&mut ctx, &e);
+                }
+            }
             if r == EXIT_FAULT {
                 break unsafe { std::mem::transmute::<u32, Exit>(ctx.exit_reason) };
             }
