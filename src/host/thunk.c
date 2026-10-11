@@ -1,5 +1,6 @@
 #include "thunk.h"
 #include "mainq.h"
+#include "cpu.h"
 #include <stdbool.h>
 #include <time.h>
 #include <string.h>
@@ -174,7 +175,10 @@ void host_dispatch(struct guest_regs *r) {
             pthread_once(&once, thunk_stats_init);
         }
         if (id < MAX_THUNKS) {
-            if (atomic_load_explicit(&mainq_pending, memory_order_relaxed) && pthread_main_np()) mainq_drain();
+            if (pthread_main_np()) {
+                cpu_main_heartbeat();
+                if (atomic_load_explicit(&mainq_pending, memory_order_relaxed)) mainq_drain();
+            }
             atomic_fetch_add_explicit(&thunk_calls[id], 1, memory_order_relaxed);
             uint64_t t0 = mach_absolute_time();
             uint64_t n0 = slow_ns ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
@@ -194,7 +198,10 @@ void host_dispatch(struct guest_regs *r) {
             return;
         }
     }
-    if (atomic_load_explicit(&mainq_pending, memory_order_relaxed) && pthread_main_np()) mainq_drain();
+    if (pthread_main_np()) {
+        cpu_main_heartbeat();
+        if (atomic_load_explicit(&mainq_pending, memory_order_relaxed)) mainq_drain();
+    }
     if (id >= nthunks) fatal("bad thunk id %u", id);
     LOGT("-> %s(%#x, %#x, %#x, %#x) ret=%#x", thunks[id].name, gread32(r->esp + 4), gread32(r->esp + 8),
          gread32(r->esp + 12), gread32(r->esp + 16), gread32(r->esp));

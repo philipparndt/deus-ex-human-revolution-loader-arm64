@@ -276,3 +276,5 @@ bool cpu_crash_regs(uint32_t *eip, uint32_t *esp, uint32_t *ebp, uint32_t regs[8
     *ebp = regs[5];
     return true;
 }
+
+void cpu_main_heartbeat(void) {} // watchdog: native backend only

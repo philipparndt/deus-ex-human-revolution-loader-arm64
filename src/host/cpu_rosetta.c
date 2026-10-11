@@ -176,3 +176,5 @@ bool cpu_crash_regs(uint32_t *eip, uint32_t *esp, uint32_t *ebp, uint32_t regs[8
     (void)eip, (void)esp, (void)ebp, (void)regs;
     return false; // the signal context holds the guest registers directly
 }
+
+void cpu_main_heartbeat(void) {} // watchdog: native backend only

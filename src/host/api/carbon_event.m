@@ -12,6 +12,7 @@
 // handled by the guest to [NSApp sendEvent:] so AppKit UI keeps working.
 #import "carbon_internal.h"
 #include "mainq.h"
+#include "cpu.h"
 
 #include <mach/mach_time.h>
 #include <pthread.h>
@@ -1083,6 +1084,7 @@ static CBEvent *queue_find(uint32_t n, gaddr_t list, bool pull) {
 
 // Wait for and process one AppKit event (main thread). remaining < 0: forever.
 static void pump(double remaining) {
+    cpu_main_heartbeat(); // watchdog: waiting for events is not a hang
     @autoreleasepool {
         NSDate *until = remaining < 0    ? [NSDate distantFuture]
                         : remaining == 0 ? [NSDate distantPast]

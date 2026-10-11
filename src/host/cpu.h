@@ -68,3 +68,6 @@ static inline uint32_t gcall3(gaddr_t fn, uint32_t a, uint32_t b, uint32_t c) {
     uint32_t v[3] = {a, b, c};
     return (uint32_t)cpu_call(fn, 3, v);
 }
+
+// Watchdog (DXH_WATCHDOG, native backend): the main thread is alive.
+void cpu_main_heartbeat(void);
