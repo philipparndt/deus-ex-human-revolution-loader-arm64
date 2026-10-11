@@ -68,6 +68,10 @@ pub struct CpuState {
     pub pad: u32,
     /// Executed instruction counter (statistics).
     pub icount: u64,
+    /// MMX registers mm0-7. On hardware they alias the x87 register mantissas;
+    /// here they are kept separately (code does not mix x87 and MMX without emms).
+    /// Executing an MMX instruction sets x87 top=0 and all tags valid, like hardware.
+    pub mm: [u64; 8],
 }
 
 impl CpuState {
@@ -84,6 +88,7 @@ impl CpuState {
             fault_eip: 0,
             pad: 0,
             icount: 0,
+            mm: [0; 8],
         }
     }
 }
