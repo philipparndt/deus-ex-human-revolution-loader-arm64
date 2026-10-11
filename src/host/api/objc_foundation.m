@@ -125,6 +125,13 @@ const char *dx_game_language_name(void) { return game_language_name[0] ? game_la
 const char *dx_game_language_code(void) { return game_language_code[0] ? game_language_code : NULL; }
 
 void objc_install_main_bundle(void) {
+    // A game must keep running in the background (music, movies, network): no
+    // App Nap timer throttling. Stalls also trip game bugs (see patches.c).
+    static id activity;
+    if (!activity)
+        activity = [[[NSProcessInfo processInfo]
+            beginActivityWithOptions:NSActivityUserInitiated | NSActivityLatencyCritical
+                              reason:@"game"] retain];
     CFBundleRef b = cf_main_bundle();
     if (!b) return;
     CFURLRef url = CFBundleCopyBundleURL(b);

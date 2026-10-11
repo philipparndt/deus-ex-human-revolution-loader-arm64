@@ -7,6 +7,7 @@
 #include "hobj.h"
 #include "log.h"
 #include "macho.h"
+#include "patches.h"
 #include "runtime.h"
 #include "thunk.h"
 
@@ -223,6 +224,7 @@ int main(int argc, char **argv) {
     runtime_preload_guest_libs(loaded, &nloaded);
 
     for (int i = 0; i < nloaded; i++) macho_link(loaded[i], resolve_symbol);
+    patches_apply(exe);
     runtime_images_loaded(loaded, nloaded);
     objc_bridge_register_images();
     objc_install_main_bundle();

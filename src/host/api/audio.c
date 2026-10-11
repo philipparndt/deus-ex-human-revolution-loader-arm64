@@ -7,6 +7,7 @@
 // AudioBuffer {UInt32 ch; UInt32 size; void *data} is 12 bytes in the guest.
 #include "common.h"
 
+#include <math.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <AudioUnit/AudioUnit.h>
 #include <CoreAudio/CoreAudio.h>
@@ -287,6 +288,17 @@ static OSStatus host_render(void *refcon, AudioUnitRenderActionFlags *flags, con
         if (io->mBuffers[i].mData && data) memcpy(io->mBuffers[i].mData, g2h(data), size);
         else if (!io->mBuffers[i].mData && data) io->mBuffers[i].mData = g2h(data); // guest supplied its own buffer
         off += size;
+    }
+    if (cb->calls % 500 == 1 && n && io->mBuffers[0].mData) {
+        // Level check (float32 output): silence vs garbage vs signal.
+        const float *s = io->mBuffers[0].mData;
+        uint32_t cnt = io->mBuffers[0].mDataByteSize / 4, nans = 0;
+        float peak = 0;
+        for (uint32_t i = 0; i < cnt; i++) {
+            if (s[i] != s[i]) nans++;
+            else if (fabsf(s[i]) > peak) peak = fabsf(s[i]);
+        }
+        LOGI("audio: render #%u peak %.4f nan %u flags %#x", cb->calls, peak, nans, flags ? *flags : 0);
     }
     return st;
 }

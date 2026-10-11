@@ -138,11 +138,16 @@ pub extern "C" fn dxcpu_print_stats() {
     let mut v: Vec<(u64, usize)> = crate::jit::FALLBACK_COUNT
         .iter()
         .enumerate()
-        .map(|(i, c)| (c.load(Ordering::Relaxed), i))
+        .map(|(i, c)| (c.swap(0, Ordering::Relaxed), i))
         .filter(|(c, _)| *c > 0)
         .collect();
     v.sort_by(|a, b| b.cmp(a));
-    eprintln!("dxcpu: {} dispatcher entries", crate::jit::DISPATCH_COUNT.load(Ordering::Relaxed));
+    let total: u64 = v.iter().map(|(c, _)| c).sum();
+    eprintln!(
+        "dxcpu: {} dispatcher entries, {} interpreted instructions",
+        crate::jit::DISPATCH_COUNT.swap(0, Ordering::Relaxed),
+        total
+    );
     for (c, i) in v.iter().take(25) {
         let m: iced_x86::Mnemonic = unsafe { std::mem::transmute(*i as u16) };
         eprintln!("  fallback {:>12} x {:?}", c, m);

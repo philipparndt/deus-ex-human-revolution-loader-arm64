@@ -6,7 +6,9 @@
 #include "log.h"
 #include "macho.h"
 
+#include <pthread.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 
 #define STUB_BASE 0xFFC00000u
@@ -41,7 +43,23 @@ static void ensure_depth(int depth) {
     }
 }
 
+// DXCPU_STATS=<seconds>: print and reset the JIT counters periodically.
+static void *stats_thread(void *arg) {
+    unsigned secs = (unsigned)(uintptr_t)arg;
+    for (;;) {
+        sleep(secs);
+        dxcpu_print_stats();
+    }
+    return NULL;
+}
+
 void cpu_init(void) {
+    const char *stats = getenv("DXCPU_STATS");
+    if (stats && atoi(stats) > 0) {
+        pthread_t t;
+        pthread_create(&t, NULL, stats_thread, (void *)(uintptr_t)atoi(stats));
+        pthread_detach(t);
+    }
     if (!guest_base) fatal("dxcpu backend requires a guest base");
     dxcpu_set_guest_base(guest_base);
     if (!gmem_map_fixed(STUB_BASE, MAX_STUBS * STUB_SIZE + MAX_DEPTH * STUB_SIZE, GPROT_RW))

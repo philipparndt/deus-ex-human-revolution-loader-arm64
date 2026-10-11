@@ -571,6 +571,9 @@ fn string_op(st: &mut CpuState, insn: &Instruction) -> ExecResult {
     };
     let step = if st.eflags & DF != 0 { (size as i32).wrapping_neg() as u32 } else { size };
     let rep = insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix();
+    if rep && st.eflags & DF == 0 && bulk_string_op(st, m, size) {
+        return Ok(Step::Next);
+    }
     loop {
         if rep && st.gpr[ECX] == 0 {
             break;
@@ -631,6 +634,53 @@ fn string_op(st: &mut CpuState, insn: &Instruction) -> ExecResult {
         }
     }
     Ok(Step::Next)
+}
+
+/// `rep movs`/`rep stos` going forward as one host copy/fill (memcpy/memset in
+/// guest code). Returns false when the element loop must run instead: address
+/// wrap-around, a forward-overlapping move (x86 replicates the pattern there,
+/// memmove would not) or the verifier's write log.
+fn bulk_string_op(st: &mut CpuState, m: Mnemonic, size: u32) -> bool {
+    use std::sync::atomic::Ordering;
+    let is_movs = matches!(m, Mnemonic::Movsb | Mnemonic::Movsw | Mnemonic::Movsd);
+    let is_stos = matches!(m, Mnemonic::Stosb | Mnemonic::Stosw | Mnemonic::Stosd);
+    if !(is_movs || is_stos) || mem::UNDO_ON.load(Ordering::Relaxed) {
+        return false;
+    }
+    let n = st.gpr[ECX] as u64 * size as u64;
+    let (dst, src) = (st.gpr[EDI] as u64, st.gpr[ESI] as u64);
+    if n == 0 || dst + n > 1 << 32 || (is_movs && src + n > 1 << 32) {
+        return false;
+    }
+    unsafe {
+        let d = mem::ptr(st.gpr[EDI]);
+        if is_movs {
+            if dst > src && dst < src + n {
+                return false;
+            }
+            std::ptr::copy(mem::ptr(st.gpr[ESI]), d, n as usize);
+            st.gpr[ESI] = (src + n) as u32;
+        } else {
+            match size {
+                1 => std::ptr::write_bytes(d, st.gpr[EAX] as u8, n as usize),
+                2 => {
+                    let v = (st.gpr[EAX] as u16).to_le_bytes();
+                    for i in 0..(n as usize / 2) {
+                        std::ptr::copy_nonoverlapping(v.as_ptr(), d.add(2 * i), 2);
+                    }
+                }
+                _ => {
+                    let v = st.gpr[EAX].to_le_bytes();
+                    for i in 0..(n as usize / 4) {
+                        std::ptr::copy_nonoverlapping(v.as_ptr(), d.add(4 * i), 4);
+                    }
+                }
+            }
+        }
+    }
+    st.gpr[EDI] = (dst + n) as u32;
+    st.gpr[ECX] = 0;
+    true
 }
 
 fn cpuid(st: &mut CpuState) {
