@@ -6,7 +6,9 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define MAX_THUNKS 65536
 
@@ -88,8 +90,56 @@ gaddr_t thunk_register_dynamic(const char *name, thunk_fn fn) { return add_thunk
 
 const char *thunk_name(uint32_t id) { return id < nthunks ? thunks[id].name : "?"; }
 
+// DXH_THUNK_STATS=<seconds>: periodically log the most frequent host calls.
+static _Atomic uint64_t thunk_calls[MAX_THUNKS];
+static int thunk_stats = -1;
+
+static int cmp_calls(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a >> 16, y = *(const uint64_t *)b >> 16;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+static void *thunk_stats_thread(void *arg) {
+    static uint64_t last[MAX_THUNKS];
+    for (;;) {
+        sleep(thunk_stats);
+        uint32_t n = nthunks;
+        uint64_t *v = malloc(sizeof *v * n), total = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            uint64_t c = thunk_calls[i], d = c - last[i];
+            last[i] = c;
+            total += d;
+            v[i] = (d << 16) | i;
+        }
+        qsort(v, n, sizeof *v, cmp_calls);
+        LOGI("thunk stats: %.0f calls/s", (double)total / thunk_stats);
+        for (uint32_t i = 0; i < n && i < 25 && (v[i] >> 16); i++)
+            LOGI("  %10.0f/s  %s", (double)(v[i] >> 16) / thunk_stats, thunks[v[i] & 0xffff].name);
+        free(v);
+    }
+    return arg;
+}
+
+static void thunk_stats_init(void) {
+    const char *e = getenv("DXH_THUNK_STATS");
+    int secs = e ? atoi(e) : 0;
+    if (secs > 0) {
+        pthread_t t;
+        thunk_stats = secs;
+        pthread_create(&t, NULL, thunk_stats_thread, NULL);
+    } else {
+        thunk_stats = 0;
+    }
+}
+
 void host_dispatch(struct guest_regs *r) {
     uint32_t id = r->thunk_id;
+    if (thunk_stats) {
+        if (thunk_stats < 0) {
+            static pthread_once_t once = PTHREAD_ONCE_INIT;
+            pthread_once(&once, thunk_stats_init);
+        }
+        if (id < MAX_THUNKS) atomic_fetch_add_explicit(&thunk_calls[id], 1, memory_order_relaxed);
+    }
     if (atomic_load_explicit(&mainq_pending, memory_order_relaxed) && pthread_main_np()) mainq_drain();
     if (id >= nthunks) fatal("bad thunk id %u", id);
     LOGT("-> %s(%#x, %#x, %#x, %#x) ret=%#x", thunks[id].name, gread32(r->esp + 4), gread32(r->esp + 8),

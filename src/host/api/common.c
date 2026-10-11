@@ -239,7 +239,11 @@ int gfmt_vsnprintf(char *out, size_t cap, const char *fmt, struct gva va) {
             continue;
         }
         case 'p': {
-            len = snprintf(tmp, sizeof tmp, "0x%x", gva_u32(&va));
+            // host %p gives Darwin's formatting incl. flags/width ("%018p" ->
+            // 0x0000000032123938, which Feral's FERAL_WSTR|| strings rely on)
+            final_spec[fl] = 'p';
+            final_spec[fl + 1] = 0;
+            len = snprintf(tmp, sizeof tmp, final_spec, (void *)(uintptr_t)gva_u32(&va));
             break;
         }
         case 'e': case 'E': case 'f': case 'F': case 'g': case 'G': case 'a': case 'A': {
