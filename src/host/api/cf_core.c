@@ -45,12 +45,14 @@ THUNK(CFAllocatorReallocate) {
 THUNK(CFAllocatorGetTypeID) { RET(CFAllocatorGetTypeID()); }
 
 // --- base object API --------------------------------------------------------------------
+bool cb_cf_retain_release(const void *obj, int delta); // carbon_window.m
+
 THUNK(CFRetain) {
     gaddr_t g = ARG(0);
     if (!g) fatal("CFRetain(NULL) called by guest (return address %#x)", gread32(r->esp));
     if (!cf_is_guest_constant(g)) {
         CFTypeRef h = gcf(g);
-        if (h) CFRetain(h);
+        if (h && !cb_cf_retain_release(h, 1)) CFRetain(h);
     }
     RET(g);
 }
@@ -59,7 +61,7 @@ THUNK(CFRelease) {
     if (!g) fatal("CFRelease(NULL) called by guest (return address %#x)", gread32(r->esp));
     if (cf_is_guest_constant(g)) return; // literals are immortal
     CFTypeRef h = gcf(g);
-    if (h) CFRelease(h);
+    if (h && !cb_cf_retain_release(h, -1)) CFRelease(h);
 }
 THUNK(CFAutorelease) {
     gaddr_t g = ARG(0);

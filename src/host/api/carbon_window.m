@@ -142,6 +142,8 @@ static void apply_attrs(CBWindow *w) {
 
 CBView *cb_window_make_views(CBWindow *w); // carbon_view.m
 
+void cb_dump_windows(const char *why);
+
 static CBWindow *window_new(uint32_t wclass, uint32_t attrs, CGRect content_global) {
     cb_app_init();
     CBWindow *w = [[CBWindow alloc] initWithKind:TK_WINDOW];
@@ -149,6 +151,7 @@ static CBWindow *window_new(uint32_t wclass, uint32_t attrs, CGRect content_glob
     w->attrs = attrs;
     w->props = [[NSMutableDictionary alloc] init];
     w->maxSize = CGSizeMake(FLT_MAX, FLT_MAX);
+    w->cf_refs = 1;
     if (content_global.size.width < 1) content_global.size.width = 1;
     if (content_global.size.height < 1) content_global.size.height = 1;
     NSRect cr = cb_global_rect_to_ns(content_global);
@@ -190,6 +193,7 @@ THUNK(CreateNewWindow) {
     LOGI("carbon: CreateNewWindow(class %u, attrs %#x, %g,%g %gx%g) = %#x", ARG(0), ARG(1), rc.origin.x,
          rc.origin.y, rc.size.width, rc.size.height, cb_handle(w));
     if (ARG(3)) gwrite32(ARG(3), cb_handle(w));
+    cb_dump_windows("CreateNewWindow");
     RET(noErr);
 }
 
@@ -233,6 +237,23 @@ void cb_window_dispose(CBWindow *w) {
 }
 
 #define WIN(i) CB_UNWRAP(CBWindow, ARG(i))
+
+// A WindowRef is a CF object: CFRetain/CFRelease (and Retain/ReleaseWindow) count
+// on it, and the last release disposes the window. The launcher releases its
+// options dialog after Play; kept alive, it reappeared whenever Feral re-showed
+// all windows on reactivation. Returns false for other objects (plain CF).
+bool cb_cf_retain_release(const void *obj, int delta) {
+    if (!obj || ![(id)obj isKindOfClass:[CBWindow class]]) return false;
+    CBWindow *w = (CBWindow *)obj;
+    int n = __atomic_add_fetch(&w->cf_refs, delta, __ATOMIC_ACQ_REL);
+    if (n <= 0 && !w->disposed) {
+        LOGD("carbon: last release of window %#x disposes it", cb_handle(w));
+        cb_on_main(^{
+          cb_window_dispose(w);
+        });
+    }
+    return true;
+}
 
 THUNK(DisposeWindow) {
     CBWindow *w = WIN(0);
@@ -307,6 +328,22 @@ static void debug_after_show(CBWindow *w) {
     });
 }
 
+// DXH_WINDUMP=1: log every NSWindow's visibility after window operations (debugging).
+void cb_dump_windows(const char *why) {
+    static int on = -1;
+    if (on < 0) on = getenv("DXH_WINDUMP") != NULL;
+    if (!on) return;
+    cb_on_main(^{
+      for (NSWindow *nw in NSApp.windows) {
+          CBWindow *cw = cb_window_for_ns(nw);
+          NSRect f = nw.frame;
+          LOGI("windump[%s]: %#x %s vis=%d key=%d level=%ld %.0f,%.0f %.0fx%.0f parent=%p cls=%s", why,
+               cw ? cb_handle(cw) : 0, cw ? "carbon" : "ns", nw.isVisible, nw.isKeyWindow, (long)nw.level,
+               f.origin.x, f.origin.y, f.size.width, f.size.height, nw.sheetParent, object_getClassName(nw));
+      }
+    });
+}
+
 static void show(CBWindow *w) {
     send_window_event(w, kEventWindowShowing, nil);
     cb_on_main(^{
@@ -316,11 +353,25 @@ static void show(CBWindow *w) {
     w->visible = true;
     send_window_event(w, kEventWindowShown, nil);
     debug_after_show(w);
+    cb_dump_windows("show");
 }
 
 THUNK(ShowWindow) {
     CBWindow *w = WIN(0);
     if (!w) return;
+    // Sheets appear through ShowSheetWindow, attached to their parent. Feral's
+    // reactivation code calls ShowWindow on every window in the list, which put
+    // the launcher's detached sheets (gamepad, account) on screen at 0,0.
+    if (w->wclass == kSheetWindowClass) {
+        __block bool attached;
+        cb_on_main(^{
+          attached = [w->ns sheetParent] != nil;
+        });
+        if (!attached) {
+            LOGD("carbon: ShowWindow(%#x) on a detached sheet ignored", ARG(0));
+            return;
+        }
+    }
     // Already visible: no-op, as in Carbon (no reordering). Feral calls this per
     // frame while walking GetNextWindow; reordering made that walk cycle forever.
     if (w->visible) {
@@ -342,6 +393,7 @@ THUNK(HideWindow) {
     });
     w->visible = false;
     send_window_event(w, kEventWindowHidden, nil);
+    cb_dump_windows("HideWindow");
 }
 THUNK(SelectWindow) {
     CBWindow *w = WIN(0);
@@ -902,6 +954,7 @@ THUNK(RunAppModalLoopForWindow) {
     w->modal_running = false;
     [w release];
     LOGI("carbon: RunAppModalLoopForWindow returned");
+    cb_dump_windows("modal returned");
     RET(noErr);
 }
 THUNK(QuitAppModalLoopForWindow) {

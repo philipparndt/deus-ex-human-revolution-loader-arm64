@@ -1,5 +1,8 @@
 #include "thunk.h"
 #include "mainq.h"
+#include <stdbool.h>
+#include <time.h>
+#include <string.h>
 
 #include "strmap.h"
 
@@ -136,15 +139,30 @@ static void *thunk_stats_thread(void *arg) {
     return arg;
 }
 
+// DXH_SLOW_MS=<ms>: log every host call that takes longer (frame spikes), except
+// calls whose job is to wait.
+static uint64_t slow_ns;
+static bool is_waiting_call(const char *n) {
+    static const char *const waits[] = {"wait", "sleep", "Sleep", "ReceiveNextEvent", "RunApplicationEventLoop",
+                                        "RunAppModalLoop", "RunCurrentEventLoop", "select", "accept", "recv",
+                                        "join", "mach_msg", "CFRunLoopRun", "Delay", "nanosleep", "kevent",
+                                        "dispatch_sync", "TrackMouse", "WaitNextEvent", "poll"};
+    for (size_t i = 0; i < sizeof waits / sizeof *waits; i++)
+        if (strstr(n, waits[i])) return true;
+    return false;
+}
+
 static void thunk_stats_init(void) {
     const char *e = getenv("DXH_THUNK_STATS");
     int secs = e ? atoi(e) : 0;
+    const char *slow = getenv("DXH_SLOW_MS");
+    if (slow && atof(slow) > 0) slow_ns = (uint64_t)(atof(slow) * 1e6);
     if (secs > 0) {
         pthread_t t;
         thunk_stats = secs;
         pthread_create(&t, NULL, thunk_stats_thread, NULL);
     } else {
-        thunk_stats = 0;
+        thunk_stats = slow_ns ? 1u << 30 : 0; // timing path only, no periodic report
     }
 }
 
@@ -156,12 +174,23 @@ void host_dispatch(struct guest_regs *r) {
             pthread_once(&once, thunk_stats_init);
         }
         if (id < MAX_THUNKS) {
+            if (atomic_load_explicit(&mainq_pending, memory_order_relaxed) && pthread_main_np()) mainq_drain();
             atomic_fetch_add_explicit(&thunk_calls[id], 1, memory_order_relaxed);
             uint64_t t0 = mach_absolute_time();
+            uint64_t n0 = slow_ns ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
             LOGT("-> %s(%#x, %#x, %#x, %#x) ret=%#x", thunks[id].name, gread32(r->esp + 4), gread32(r->esp + 8),
                  gread32(r->esp + 12), gread32(r->esp + 16), gread32(r->esp));
             thunks[id].fn(r);
             atomic_fetch_add_explicit(&thunk_ticks[id], mach_absolute_time() - t0, memory_order_relaxed);
+            if (slow_ns) {
+                uint64_t dt = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - n0;
+                if (dt > slow_ns && !is_waiting_call(thunks[id].name)) {
+                    char tn[64] = "";
+                    pthread_getname_np(pthread_self(), tn, sizeof tn);
+                    LOGI("slow call: %s %.1f ms (%s%sargs %#x %#x %#x)", thunks[id].name, dt / 1e6, tn,
+                         tn[0] ? ", " : "", gread32(r->esp + 4), gread32(r->esp + 8), gread32(r->esp + 12));
+                }
+            }
             return;
         }
     }

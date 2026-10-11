@@ -185,6 +185,7 @@ OSStatus cb_hiobject_construct(CBObject *o, NSString *classID, gaddr_t initEvent
     CBView *defaultButton, *cancelButton;
     bool modal_running, modal_quit;
     bool disposed;
+    int cf_refs; // Carbon/CF retain count of the WindowRef (CFRetain/CFRelease)
     bool visible;
 }
 @end
