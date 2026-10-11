@@ -101,6 +101,29 @@ static NSBundle *dx_main_bundle(id self, SEL _cmd) {
     (void)self, (void)_cmd;
     return game_bundle;
 }
+// The game's language, as Steam would launch it: DXH_LANGUAGE (code or Steam
+// name) or Contents/Resources/steam_language written by the language depot.
+static NSString *game_language(NSBundle *bundle) {
+    NSString *l = nil;
+    const char *e = getenv("DXH_LANGUAGE");
+    if (e && *e) l = [NSString stringWithUTF8String:e];
+    if (!l.length) {
+        NSString *p = [bundle pathForResource:@"steam_language" ofType:nil];
+        l = p ? [NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:NULL] : nil;
+    }
+    l = [[l stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
+    NSDictionary *names = @{@"english": @"en", @"german": @"de", @"french": @"fr", @"italian": @"it",
+                            @"spanish": @"es", @"russian": @"ru", @"polish": @"pl", @"japanese": @"ja"};
+    if (names[l]) l = names[l];
+    return l.length ? l : nil;
+}
+
+// Steam's name for the game language ("german"), or NULL to ask Steam.
+static char game_language_name[32];
+static char game_language_code[16];
+const char *dx_game_language_name(void) { return game_language_name[0] ? game_language_name : NULL; }
+const char *dx_game_language_code(void) { return game_language_code[0] ? game_language_code : NULL; }
+
 void objc_install_main_bundle(void) {
     CFBundleRef b = cf_main_bundle();
     if (!b) return;
@@ -111,4 +134,17 @@ void objc_install_main_bundle(void) {
     Method m = class_getClassMethod([NSBundle class], @selector(mainBundle));
     method_setImplementation(m, (IMP)dx_main_bundle);
     LOGI("objc: main bundle is %s", game_bundle.bundlePath.UTF8String);
+    NSString *lang = game_language(game_bundle);
+    if (lang) {
+        // like launching with -AppleLanguages (xx): the launcher compares its
+        // localization with steam_language and otherwise asks for a restart forever
+        [[NSUserDefaults standardUserDefaults] setVolatileDomain:@{@"AppleLanguages": @[lang]}
+                                                         forName:NSArgumentDomain];
+        NSDictionary *steam = @{@"en": @"english", @"de": @"german", @"fr": @"french", @"it": @"italian",
+                                @"es": @"spanish", @"ru": @"russian", @"pl": @"polish", @"ja": @"japanese"};
+        strlcpy(game_language_code, lang.UTF8String, sizeof game_language_code);
+        NSString *name = steam[lang];
+        if (name) strlcpy(game_language_name, name.UTF8String, sizeof game_language_name);
+        LOGI("objc: game language %s", lang.UTF8String);
+    }
 }

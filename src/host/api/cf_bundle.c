@@ -77,7 +77,28 @@ THUNK(CFBundleCopyLocalizedString) {
 }
 THUNK(CFBundleCopyBundleLocalizations) { RET_CF(CFBundleCopyBundleLocalizations(GB(0))); }
 THUNK(CFBundleCopyPreferredLocalizationsFromArray) {
-    RET_CF(CFBundleCopyPreferredLocalizationsFromArray((CFArrayRef)ARGCF(0)));
+    // Prefer the game language (steam_language / DXH_LANGUAGE) when offered.
+    extern const char *dx_game_language_code(void);
+    CFArrayRef offered = (CFArrayRef)ARGCF(0);
+    const char *code = dx_game_language_code();
+    if (code && offered) {
+        CFStringRef want = CFStringCreateWithCString(NULL, code, kCFStringEncodingUTF8);
+        CFIndex n = CFArrayGetCount(offered);
+        for (CFIndex i = 0; i < n; i++) {
+            CFStringRef l = CFArrayGetValueAtIndex(offered, i);
+            if (CFGetTypeID(l) != CFStringGetTypeID()) continue;
+            CFLocaleIdentifier canon = CFLocaleCreateCanonicalLanguageIdentifierFromString(NULL, l);
+            bool match = canon && CFStringHasPrefix(canon, want);
+            if (canon) CFRelease(canon);
+            if (match) {
+                CFRelease(want);
+                CFArrayRef one = CFArrayCreate(NULL, (const void **)&l, 1, &kCFTypeArrayCallBacks);
+                RET_CF(one);
+            }
+        }
+        CFRelease(want);
+    }
+    RET_CF(CFBundleCopyPreferredLocalizationsFromArray(offered));
 }
 THUNK(CFBundleCopyLocalizationsForPreferences) {
     RET_CF(CFBundleCopyLocalizationsForPreferences((CFArrayRef)ARGCF(0), (CFArrayRef)ARGCF(1)));

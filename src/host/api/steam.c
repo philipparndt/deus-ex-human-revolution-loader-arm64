@@ -425,9 +425,10 @@ static void generic_call(struct guest_regs *r, void *host, const struct mref *re
     case 'q': LOGD("steam: %s -> %#llx", ref->name, (unsigned long long)rv.u64); RET64(rv.u64);
     case 'f': RETD(rv.f);
     case 'S': {
-        // DXH_LANGUAGE=german etc. overrides the game language Steam reports
-        // (Feral picks speech and text language from it).
-        const char *lang = getenv("DXH_LANGUAGE");
+        // The game language (DXH_LANGUAGE or the app's steam_language) overrides
+        // what Steam reports; Feral picks speech and text language from it.
+        extern const char *dx_game_language_name(void);
+        const char *lang = dx_game_language_name();
         if (lang && *lang && strstr(ref->name, "GetCurrentGameLanguage")) rv.p = (void *)lang;
         LOGD("steam: %s -> \"%s\"", ref->name, rv.p ? (const char *)rv.p : "(null)");
         RET(intern_string(rv.p));
