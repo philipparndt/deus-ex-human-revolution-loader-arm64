@@ -5,6 +5,8 @@
 //! code to arm64 builds on top of it and falls back to the interpreter for
 //! rare instructions.
 
+pub mod a64;
+pub mod codebuf;
 pub mod ffi;
 pub mod fpu;
 pub mod interp;
