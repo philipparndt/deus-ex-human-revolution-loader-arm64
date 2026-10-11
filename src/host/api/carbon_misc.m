@@ -412,8 +412,9 @@ THUNK(SetApplicationDockTileImage) {
     RET(noErr);
 }
 THUNK(RestoreApplicationDockTileImage) {
+    extern NSImage *cb_game_icon(void);
     cb_on_main(^{
-      [NSApp setApplicationIconImage:nil];
+      [NSApp setApplicationIconImage:cb_game_icon()];
     });
     RET(noErr);
 }

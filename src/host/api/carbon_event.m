@@ -89,6 +89,19 @@ CGRect cb_ns_rect_to_global(NSRect rc) {
 
 static void app_notifications(void);
 
+// The game bundle's icon (the host process is a bare executable).
+NSImage *cb_game_icon(void) {
+    static NSImage *icon;
+    if (!icon) {
+        NSBundle *b = [NSBundle mainBundle]; // swizzled to the game .app
+        NSString *name = [b objectForInfoDictionaryKey:@"CFBundleIconFile"];
+        NSString *path = name ? [b pathForResource:[name stringByDeletingPathExtension] ofType:@"icns"] : nil;
+        if (path) icon = [[NSImage alloc] initWithContentsOfFile:path];
+        if (!icon && b.bundlePath) icon = [[[NSWorkspace sharedWorkspace] iconForFile:b.bundlePath] retain];
+    }
+    return icon;
+}
+
 void cb_app_init(void) {
     static bool done;
     if (done) return;
@@ -97,6 +110,7 @@ void cb_app_init(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        if (cb_game_icon()) [NSApp setApplicationIconImage:cb_game_icon()];
         cb_menu_module_init();
         if (![[NSRunningApplication currentApplication] isFinishedLaunching]) [NSApp finishLaunching];
         [NSApp activateIgnoringOtherApps:YES];

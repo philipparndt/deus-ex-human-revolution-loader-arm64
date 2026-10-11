@@ -319,6 +319,13 @@ void cb_view_window_resized(CBWindow *w) {
 }
 
 static void apply_value(CBView *v);
+// The tab bar (the box is inserted below it, so it is not the first subview).
+static NSSegmentedControl *tabs_bar(NSView *n) {
+    for (NSView *sv in [n subviews])
+        if ([sv isKindOfClass:[NSSegmentedControl class]]) return (NSSegmentedControl *)sv;
+    return nil;
+}
+
 static void apply_font_style(CBView *v, gaddr_t rec);
 void cb_popup_set_menu(CBView *v, CBMenu *m); // carbon_menu.m
 
@@ -337,8 +344,8 @@ void cb_view_sync_from_ns(CBView *v) {
     case CT_SLIDER: v->value = (int32_t)lround([(NSSlider *)n doubleValue]); break;
     case CT_POPUP: v->value = (int32_t)[(NSPopUpButton *)n indexOfSelectedItem] + 1; break;
     case CT_TABS: {
-        NSSegmentedControl *sc = [[n subviews] firstObject];
-        if ([sc isKindOfClass:[NSSegmentedControl class]]) v->value = (int32_t)[sc selectedSegment] + 1;
+        NSSegmentedControl *sc = tabs_bar(n);
+        if (sc) v->value = (int32_t)[sc selectedSegment] + 1;
         break;
     }
     }
@@ -369,8 +376,8 @@ static void apply_value(CBView *v) {
           if (val >= 1 && val <= [(NSPopUpButton *)n numberOfItems]) [(NSPopUpButton *)n selectItemAtIndex:val - 1];
           break;
       case CT_TABS: {
-          NSSegmentedControl *sc = [[n subviews] firstObject];
-          if ([sc isKindOfClass:[NSSegmentedControl class]] && val >= 1 && val <= [sc segmentCount])
+          NSSegmentedControl *sc = tabs_bar(n);
+          if (sc && val >= 1 && val <= [sc segmentCount])
               [sc setSelectedSegment:val - 1];
           break;
       }
@@ -889,8 +896,8 @@ THUNK(CreatePopupButtonControl) {
 }
 
 static void tabs_rebuild(CBView *v) {
-    NSSegmentedControl *sc = [[v->ns subviews] firstObject];
-    if (![sc isKindOfClass:[NSSegmentedControl class]]) return;
+    NSSegmentedControl *sc = tabs_bar(v->ns);
+    if (!sc) return;
     [sc setSegmentCount:(NSInteger)v->tabs.count];
     for (NSUInteger i = 0; i < v->tabs.count; i++) {
         [sc setLabel:v->tabs[i] forSegment:(NSInteger)i];
@@ -938,6 +945,7 @@ THUNK(CreateTabsControl) {
       NSSegmentedControl *sc = [[[NSSegmentedControl alloc] initWithFrame:NSZeroRect] autorelease];
       [sc setSegmentStyle:NSSegmentStyleRounded];
       [sc setTrackingMode:NSSegmentSwitchTrackingSelectOne];
+      [sc setAutoresizingMask:NSViewMinXMargin | NSViewMaxXMargin]; // stays centered
       [f addSubview:sc];
       [f addSubview:box positioned:NSWindowBelow relativeTo:sc];
       v = make_control(ARG(0), ARG(1), CT_TABS, f, @"");
@@ -1031,7 +1039,7 @@ static void set_enabled(CBView *v, bool en) {
     v->enabled = en;
     cb_on_main(^{
       if ([v->ns isKindOfClass:[NSControl class]]) [(NSControl *)v->ns setEnabled:en];
-      if (v->ctype == CT_TABS) [(NSControl *)[[v->ns subviews] firstObject] setEnabled:en];
+      if (v->ctype == CT_TABS) [tabs_bar(v->ns) setEnabled:en];
     });
     for (CBView *s in v->subviews) {
         // latent enabling: children follow their parent
@@ -1269,8 +1277,8 @@ THUNK(SetControlData) {
         if (v->ctype == CT_TABS && part >= 1) {
             bool en = gread8(d) != 0;
             cb_on_main(^{
-              NSSegmentedControl *sc = [[v->ns subviews] firstObject];
-              if (part <= [sc segmentCount]) [sc setEnabled:en forSegment:part - 1];
+              NSSegmentedControl *sc = tabs_bar(v->ns);
+              if (sc && part <= [sc segmentCount]) [sc setEnabled:en forSegment:part - 1];
             });
         }
         RET(noErr);
