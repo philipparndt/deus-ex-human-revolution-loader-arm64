@@ -708,6 +708,19 @@ THUNK(HIWindowGetGreatestAreaDisplay) {
     RET(noErr);
 }
 
+// Is the global point (CG coordinates, top-left origin) inside the key window's
+// content? False without a key window (cg_display.c: mouse grab during drags).
+bool cb_point_in_key_content(CGPoint global) {
+    __block bool in = false;
+    cb_on_main(^{
+      NSWindow *key = NSApp.keyWindow;
+      if (!key) return;
+      NSRect content = [key contentRectForFrameRect:key.frame];
+      in = NSPointInRect(cb_global_to_ns(global), content);
+    });
+    return in;
+}
+
 // HIWindowFindAtLocation(const HIPoint *, space, startWindow, options, WindowRef *out, WindowPartCode *part, HIPoint *outLoc)
 THUNK(HIWindowFindAtLocation) {
     CGPoint p = CGPointMake(greadf(ARG(0)), greadf(ARG(0) + 4));

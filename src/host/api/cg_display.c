@@ -401,17 +401,63 @@ THUNK(CGDisplayRestoreColorSyncSettings) {
 
 // --- cursor / events ----------------------------------------------------------------------------------
 
+// Window dragging: clicking the title bar of the (inactive) game window activates
+// it, and the game grabs the mouse right away (dissociates and recentres the
+// cursor), which kills the drag. While the left button is held outside the game
+// window's content, grabbing is deferred until the button is released.
+extern bool cb_point_in_key_content(CGPoint global); // carbon_window.m
+static volatile bool grab_pending;
+static volatile bool grabbed; // mouse dissociated by the game (no drag possible then)
+
+static bool grab_blocked(void) {
+    if (grabbed) return false; // cheap path while playing: no main-thread query per frame
+    if (!CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) return false;
+    CGEventRef ev = CGEventCreate(NULL);
+    CGPoint p = ev ? CGEventGetLocation(ev) : CGPointZero;
+    if (ev) CFRelease(ev);
+    return !cb_point_in_key_content(p);
+}
+
+// The app lost focus: the user must get the mouse back, and the next activation
+// (often a title bar click) starts ungrabbed.
+void cg_mouse_app_deactivated(void) {
+    grab_pending = false;
+    if (grabbed) {
+        grabbed = false;
+        CGAssociateMouseAndMouseCursorPosition(true);
+    }
+}
+
+// Apply a deferred grab once the drag is over (called from the per-frame mouse calls).
+static void grab_resume(void) {
+    if (grab_pending && !grab_blocked()) {
+        grab_pending = false;
+        LOGD("cg: deferred mouse grab applied");
+        CGAssociateMouseAndMouseCursorPosition(false);
+        grabbed = true;
+    }
+}
+
 THUNK(CGWarpMouseCursorPosition) {
     CGPoint p = ARGPOINT(0);
     LOGT("cg: warp cursor to %g,%g", p.x, p.y);
-    if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
-    else { RET(CGWarpMouseCursorPosition(p)); return; }
+    if (env_flag("DXH_NO_MOUSE_GRAB") || grab_blocked()) { RET(kCGErrorSuccess); return; }
+    grab_resume();
+    RET(CGWarpMouseCursorPosition(p));
 }
 
 THUNK(CGAssociateMouseAndMouseCursorPosition) {
     LOGD("cg: CGAssociateMouseAndMouseCursorPosition(%u)", ARG(0));
     if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
-    else { RET(CGAssociateMouseAndMouseCursorPosition(ARG(0))); return; }
+    if (!ARG(0) && grab_blocked()) {
+        LOGD("cg: mouse grab deferred (window drag)");
+        grab_pending = true;
+        RET(kCGErrorSuccess);
+        return;
+    }
+    grab_pending = false;
+    grabbed = !ARG(0);
+    RET(CGAssociateMouseAndMouseCursorPosition(ARG(0)));
 }
 
 #pragma clang diagnostic push
@@ -422,10 +468,11 @@ THUNK(CGSetLocalEventsSuppressionInterval) { RET(CGSetLocalEventsSuppressionInte
 THUNK(CGDisplayHideCursor) { RET(CGDisplayHideCursor(ARG(0))); }
 THUNK(CGDisplayShowCursor) { RET(CGDisplayShowCursor(ARG(0))); }
 THUNK(CGDisplayMoveCursorToPoint) {
-    if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
+    if (env_flag("DXH_NO_MOUSE_GRAB") || grab_blocked()) { RET(kCGErrorSuccess); return; }
     else { RET(CGDisplayMoveCursorToPoint(ARG(0), ARGPOINT(1))); return; }
 }
 THUNK(CGGetLastMouseDelta) {
+    grab_resume();
     int32_t dx = 0, dy = 0;
     CGGetLastMouseDelta(&dx, &dy);
     if (ARG(0)) gwrite32(ARG(0), (uint32_t)dx);

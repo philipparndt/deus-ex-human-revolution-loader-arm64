@@ -1432,6 +1432,8 @@ static void app_notifications(void) {
     [nc addObserverForName:NSApplicationDidResignActiveNotification object:nil queue:nil
                 usingBlock:^(NSNotification *n) {
                   LOGD("carbon: app deactivated");
+                  extern void cg_mouse_app_deactivated(void); // cg_display.c
+                  cg_mouse_app_deactivated();
                   cb_keymap_clear();
                   send_app_event(kEventAppDeactivated);
                 }];
