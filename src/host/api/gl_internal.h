@@ -41,6 +41,9 @@ struct glmap {
     uint32_t off, len;  // mapped range within the buffer
     GLbitfield access;  // GL_MAP_*_BIT style flags
     bool range;         // mapped with glMapBufferRange (vs. glMapBuffer)
+    bool virt;          // no driver mapping: written ranges are uploaded (see glMapBuffer)
+    bool undefined;     // virt: contents were undefined at map time (orphaned buffer)
+    GLenum usage;       // virt: buffer usage, to re-specify the storage with the data
 };
 
 struct glstr {

@@ -402,20 +402,29 @@ THUNK(CGDisplayRestoreColorSyncSettings) {
 // --- cursor / events ----------------------------------------------------------------------------------
 
 // Window dragging: clicking the title bar of the (inactive) game window activates
-// it, and the game grabs the mouse right away (dissociates and recentres the
-// cursor), which kills the drag. While the left button is held outside the game
-// window's content, grabbing is deferred until the button is released.
-extern bool cb_point_in_key_content(CGPoint global); // carbon_window.m
-static volatile bool grab_pending;
-static volatile bool grabbed; // mouse dissociated by the game (no drag possible then)
+// it, and the game grabs the mouse at once (dissociates and recentres the cursor),
+// which kills the drag. A press that starts on the window frame (reported by
+// carbon_event.m) defers grabbing until that button is released. Presses inside
+// the game (aiming while shooting) are never affected.
+static volatile bool frame_press;  // left button went down on a window frame
+static volatile bool grab_pending; // the game asked for a grab during that press
+static volatile bool grabbed;      // mouse dissociated by the game
 
 static bool grab_blocked(void) {
-    if (grabbed) return false; // cheap path while playing: no main-thread query per frame
-    if (!CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) return false;
-    CGEventRef ev = CGEventCreate(NULL);
-    CGPoint p = ev ? CGEventGetLocation(ev) : CGPointZero;
-    if (ev) CFRelease(ev);
-    return !cb_point_in_key_content(p);
+    if (!frame_press) return false;
+    if (CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) return true;
+    frame_press = false; // released: the drag is over
+    return false;
+}
+
+// carbon_event.m: a mouse-down on the title bar/frame goes to AppKit.
+void cg_mouse_frame_press(void) {
+    frame_press = true;
+    if (grabbed) { // the activation already grabbed it: let the drag work
+        grabbed = false;
+        grab_pending = true;
+        CGAssociateMouseAndMouseCursorPosition(true);
+    }
 }
 
 // The app lost focus: the user must get the mouse back, and the next activation

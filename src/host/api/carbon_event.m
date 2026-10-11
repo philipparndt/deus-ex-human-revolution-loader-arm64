@@ -924,8 +924,11 @@ static bool translate(NSEvent *e) {
         // traffic lights), as with Carbon's standard window handler.
         NSWindow *win = [e window];
         if (win && ([win styleMask] & NSWindowStyleMaskTitled) && !([win styleMask] & NSWindowStyleMaskFullScreen) &&
-            !NSPointInRect([e locationInWindow], [[win contentView] frame]))
+            !NSPointInRect([e locationInWindow], [[win contentView] frame])) {
+            extern void cg_mouse_frame_press(void); // cg_display.c: no mouse grab during the drag
+            if ([e type] == NSEventTypeLeftMouseDown) cg_mouse_frame_press();
             return false;
+        }
         c = cb_event_new(kEventClassMouse, kEventMouseDown, when);
         set_mouse_params(c, e);
         break;

@@ -324,10 +324,70 @@ static GLbitfield legacy_access(GLenum access) {
     }
 }
 
+// Write-only maps whose written ranges are known need no driver mapping, which
+// waits until the GPU is done with the buffer (HR: up to 670 ms per map in
+// gameplay). They qualify when the guest flushes explicitly
+// (BUFFER_FLUSHING_UNMAP_APPLE false) or the buffer was orphaned
+// (glBufferData(NULL)), so unwritten bytes are undefined either way. The guest
+// writes the shadow; flushed ranges go up with glBufferSubData, a fully
+// rewritten orphaned buffer with glBufferData (fresh storage). DXH_GL_REALMAP=1
+// disables this.
+static gaddr_t map_virtual(GLenum target, GLuint buf, uint32_t size) {
+    struct glctx *s = gl_cur();
+    struct glmap *m = NULL;
+    for (int i = 0; i < 16 && !m; i++)
+        if (!s->maps[i].buf) m = &s->maps[i];
+    if (!m) return 0;
+    gaddr_t g = gheap_memalign(64, size ? size : 1);
+    if (!g) return 0;
+    GLint usage = GL_DYNAMIC_DRAW;
+    glGetBufferParameteriv(target, GL_BUFFER_USAGE, &usage);
+    *m = (struct glmap){buf, NULL, g, 0, size, GL_MAP_WRITE_BIT, false, true, buf_flag(s, buf, BUF_UNDEFINED),
+                        (GLenum)usage};
+    LOGT("gl: virtual map of buffer %u (%u bytes%s)", buf, size, m->undefined ? ", orphaned" : "");
+    return g;
+}
+
+static bool virtual_maps(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("DXH_GL_REALMAP") == NULL;
+    return on;
+}
+
+// Upload a written range of a virtual mapping.
+static void virtual_upload(GLenum target, struct glmap *m, uint32_t off, uint32_t len) {
+    if (off > m->len || len > m->len - off) {
+        LOGE("gl: flush range %u+%u outside mapping of %u bytes", off, len, m->len);
+        return;
+    }
+    if (m->undefined && off == 0 && len == m->len) {
+        glBufferData(target, len, g2h(m->guest), m->usage); // new storage: no wait for the GPU
+        m->undefined = false;
+    } else if (len) {
+        glBufferSubData(target, off, len, (uint8_t *)g2h(m->guest) + off);
+    }
+    if (mstats_enabled()) atomic_fetch_add(&mstats.out_bytes, len);
+}
+
 THUNK(glMapBuffer) {
     GLenum target = ARG(0), access = ARG(1);
     GLint size = 0;
     glGetBufferParameteriv(target, GL_BUFFER_SIZE, &size);
+    if (access == GL_WRITE_ONLY && virtual_maps()) {
+        struct glctx *s = gl_cur();
+        GLuint buf = bound_buffer(s, target);
+        if (buf && !find_map(s, buf) && (buf_flag(s, buf, BUF_NOFLUSH) || buf_flag(s, buf, BUF_UNDEFINED))) {
+            gaddr_t g = map_virtual(target, buf, (uint32_t)size);
+            if (g) {
+                if (mstats_enabled()) {
+                    atomic_fetch_add(&mstats.maps, 1);
+                    mstats_tick();
+                }
+                RET(g);
+                return;
+            }
+        }
+    }
     uint64_t t0 = mstats_enabled() ? now_ns() : 0;
     void *host = glMapBuffer(target, access);
     if (t0) {
@@ -379,6 +439,10 @@ THUNK(glFlushMappedBufferRangeAPPLE) {
     GLenum target = ARG(0);
     struct glctx *s = gl_cur();
     struct glmap *m = find_map(s, bound_buffer(s, target));
+    if (m && m->virt) {
+        virtual_upload(target, m, (uint32_t)ARGIPTR(1), (uint32_t)ARGIPTR(2));
+        return;
+    }
     if (m) flush_range(m, (uint32_t)ARGIPTR(1) - m->off, (uint32_t)ARGIPTR(2));
     glFlushMappedBufferRangeAPPLE(target, ARGIPTR(1), ARGIPTR(2));
 }
@@ -408,6 +472,15 @@ THUNK(glUnmapBuffer) {
     struct glctx *s = gl_cur();
     GLuint b = bound_buffer(s, target);
     struct glmap *m = find_map(s, b);
+    if (m && m->virt) {
+        // Implicit flush (orphaned buffer without explicit flushing): all of it.
+        if (!buf_flag(s, b, BUF_NOFLUSH)) virtual_upload(target, m, 0, m->len);
+        gheap_free(m->guest);
+        memset(m, 0, sizeof *m);
+        if (b < s->buf_noflush_cap) s->buf_noflush[b] &= ~BUF_UNDEFINED;
+        RET(GL_TRUE);
+        return;
+    }
     if (m) {
         if (m->access & GL_MAP_WRITE_BIT) {
             bool explicit_flush = m->range ? (m->access & GL_MAP_FLUSH_EXPLICIT_BIT) != 0
