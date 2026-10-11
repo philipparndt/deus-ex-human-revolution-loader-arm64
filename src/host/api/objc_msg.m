@@ -342,6 +342,22 @@ static void call_host(struct guest_regs *r, id recv, Class lookup_cls, SEL sel, 
         return guest_throw(r, o2g(e));
     }
     r->ret = mc.ret;
+    LOGT("objc:   = %#x", (uint32_t)mc.ret);
+    if (sel == @selector(copyNextSampleBuffer) && !mc.ret) {
+        // NULL from an asset reader output: report why, once per output
+        static NSHashTable *seen;
+        static pthread_mutex_t seen_lock = PTHREAD_MUTEX_INITIALIZER;
+        pthread_mutex_lock(&seen_lock);
+        if (!seen) seen = [[NSHashTable weakObjectsHashTable] retain];
+        bool first = ![seen containsObject:recv];
+        if (first) [seen addObject:recv];
+        pthread_mutex_unlock(&seen_lock);
+        if (first) {
+            id track = [recv respondsToSelector:@selector(track)] ? [recv performSelector:@selector(track)] : nil;
+            LOGI("objc: copyNextSampleBuffer returned NULL on %s output (track %s)", class_getName([recv class]),
+                 [[track description] UTF8String] ?: "?");
+        }
+    }
     if (mc.fp_ret) {
         r->fret = mc.fret;
         r->fp_ret = 1;

@@ -440,6 +440,28 @@ static int64_t read_hint(const struct ty *t, const uint8_t *p) {
     }
 }
 
+// A C string returned by a method (UTF8String, fileSystemRepresentation, ...)
+// lives as long as the current autorelease pool, as in Cocoa: a guest copy is
+// freed by an autoreleased host object (guest pools are host pools).
+@interface DXGuestStringCopy : NSObject {
+  @public
+    gaddr_t g;
+}
+@end
+@implementation DXGuestStringCopy
+- (void)dealloc {
+    gheap_free(g);
+    [super dealloc];
+}
+@end
+
+static gaddr_t autoreleased_guest_string(const char *p) {
+    DXGuestStringCopy *c = [[DXGuestStringCopy alloc] init];
+    c->g = gheap_strdup(p);
+    [c autorelease];
+    return c->g;
+}
+
 static void conv_h2g(const struct ty *ht, const uint8_t *src, const struct ty *gt, gaddr_t dst) {
     switch (gt->code) {
     case 'c': case 'C': case 'B': case 's': case 'S': case 'i': case 'I': case 'l': case 'L': case 'q': case 'Q':
@@ -467,7 +489,7 @@ static void conv_h2g(const struct ty *ht, const uint8_t *src, const struct ty *g
         memcpy(&p, src, sizeof p);
         if (p && !host_ptr_in_guest(p)) {
             if (gt->code == '*') {
-                gwrite32(dst, guest_static_string(5, p)); // host C string -> guest copy
+                gwrite32(dst, autoreleased_guest_string(p)); // host C string -> guest copy
             } else {
                 // Opaque host pointers (CGLContextObj, CGContextRef, ...) become
                 // handles, the same ones the C API thunks use.
