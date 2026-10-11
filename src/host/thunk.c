@@ -6,6 +6,7 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include <pthread.h>
+#include <mach/mach_time.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -92,29 +93,45 @@ const char *thunk_name(uint32_t id) { return id < nthunks ? thunks[id].name : "?
 
 // DXH_THUNK_STATS=<seconds>: periodically log the most frequent host calls.
 static _Atomic uint64_t thunk_calls[MAX_THUNKS];
+static _Atomic uint64_t thunk_ticks[MAX_THUNKS]; // time inside the host function
 static int thunk_stats = -1;
+
+static uint64_t cur_delta[MAX_THUNKS];
+static uint64_t calls_delta(uint32_t id) { return cur_delta[id]; }
 
 static int cmp_calls(const void *a, const void *b) {
     uint64_t x = *(const uint64_t *)a >> 16, y = *(const uint64_t *)b >> 16;
     return x < y ? 1 : x > y ? -1 : 0;
 }
 static void *thunk_stats_thread(void *arg) {
-    static uint64_t last[MAX_THUNKS];
+    static uint64_t last[MAX_THUNKS], last_ticks[MAX_THUNKS];
+    mach_timebase_info_data_t tb;
+    mach_timebase_info(&tb);
     for (;;) {
         sleep(thunk_stats);
         uint32_t n = nthunks;
-        uint64_t *v = malloc(sizeof *v * n), total = 0;
+        uint64_t *v = malloc(sizeof *v * n), *dt = malloc(sizeof *dt * n), total = 0, total_t = 0;
         for (uint32_t i = 0; i < n; i++) {
-            uint64_t c = thunk_calls[i], d = c - last[i];
+            uint64_t c = thunk_calls[i], d = c - last[i], t = thunk_ticks[i];
+            dt[i] = (t - last_ticks[i]) * tb.numer / tb.denom; // ns
+            cur_delta[i] = d;
             last[i] = c;
+            last_ticks[i] = t;
             total += d;
-            v[i] = (d << 16) | i;
+            total_t += dt[i];
+            v[i] = (dt[i] << 16) | i; // sort by time spent
         }
         qsort(v, n, sizeof *v, cmp_calls);
-        LOGI("thunk stats: %.0f calls/s", (double)total / thunk_stats);
-        for (uint32_t i = 0; i < n && i < 25 && (v[i] >> 16); i++)
-            LOGI("  %10.0f/s  %s", (double)(v[i] >> 16) / thunk_stats, thunks[v[i] & 0xffff].name);
+        LOGI("thunk stats: %.0f calls/s, %.1f%% of one core inside host calls", (double)total / thunk_stats,
+             total_t / 1e7 / thunk_stats);
+        for (uint32_t i = 0; i < n && i < 25 && (v[i] >> 16); i++) {
+            uint32_t id = v[i] & 0xffff;
+            LOGI("  %6.2f%% core %9.0f calls/s %7.0f ns/call  %s", dt[id] / 1e7 / thunk_stats,
+                 (double)calls_delta(id) / thunk_stats, calls_delta(id) ? (double)dt[id] / calls_delta(id) : 0,
+                 thunks[id].name);
+        }
         free(v);
+        free(dt);
     }
     return arg;
 }
@@ -138,7 +155,15 @@ void host_dispatch(struct guest_regs *r) {
             static pthread_once_t once = PTHREAD_ONCE_INIT;
             pthread_once(&once, thunk_stats_init);
         }
-        if (id < MAX_THUNKS) atomic_fetch_add_explicit(&thunk_calls[id], 1, memory_order_relaxed);
+        if (id < MAX_THUNKS) {
+            atomic_fetch_add_explicit(&thunk_calls[id], 1, memory_order_relaxed);
+            uint64_t t0 = mach_absolute_time();
+            LOGT("-> %s(%#x, %#x, %#x, %#x) ret=%#x", thunks[id].name, gread32(r->esp + 4), gread32(r->esp + 8),
+                 gread32(r->esp + 12), gread32(r->esp + 16), gread32(r->esp));
+            thunks[id].fn(r);
+            atomic_fetch_add_explicit(&thunk_ticks[id], mach_absolute_time() - t0, memory_order_relaxed);
+            return;
+        }
     }
     if (atomic_load_explicit(&mainq_pending, memory_order_relaxed) && pthread_main_np()) mainq_drain();
     if (id >= nthunks) fatal("bad thunk id %u", id);
