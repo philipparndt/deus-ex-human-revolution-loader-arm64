@@ -1,0 +1,15 @@
+[package]
+name = "dxcpu"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[profile.release]
+debug = true
+panic = "abort"
+opt-level = 3
+
+[dependencies]
+iced-x86 = { version = "1.21.0", default-features = false, features = ["decoder", "std", "instr_info", "intel", "code_asm"] }
