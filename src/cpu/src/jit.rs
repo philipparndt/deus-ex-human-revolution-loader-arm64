@@ -70,6 +70,10 @@ pub const K_SUB: u32 = 2;
 pub const K_LOGIC: u32 = 3;
 pub const K_INC: u32 = 4;
 pub const K_DEC: u32 = 5;
+/// Shifts: fres = result, fcf = CF, fa = OF; SF/ZF/PF from the result, AF unchanged.
+/// In registers the host NZCV holds N/Z of the result, C = !CF, V = OF (the K_SUB
+/// convention, so conditions map the same way).
+pub const K_SHIFT: u32 = 7;
 /// Translator-internal: host NZCV holds the result of an FCMP (ucomiss & co).
 /// Never stored in JitCtx (materialised to EFLAGS on flush).
 const K_FCMP: u32 = 6;
@@ -163,6 +167,14 @@ impl JitCtx {
             K_LOGIC => interp::logic_flags(size, self.fres),
             K_INC => (interp::add_flags(size, self.fa, 1, 0).1 & !CF) | (self.fcf & CF),
             K_DEC => (interp::sub_flags(size, self.fa, 1, 0).1 & !CF) | (self.fcf & CF),
+            K_SHIFT => {
+                let f = (interp::logic_flags(size, self.fres) & !(CF | OF))
+                    | (self.fcf & CF)
+                    | if self.fa & 1 != 0 { OF } else { 0 };
+                self.eflags = (self.eflags & !(ARITH & !AF)) | f;
+                self.fkind = K_MAT;
+                return;
+            }
             _ => 0,
         };
         self.eflags = (self.eflags & !ARITH) | f;
@@ -905,6 +917,53 @@ impl Translator {
         self.a.emit(0x1400_0000 | ((off as u32) & 0x03ff_ffff));
     }
 
+    /// 32-bit shift of T0 by the constant c (1..31): result in T2 and FR, CF in FC,
+    /// OF in FA (as the interpreter computes it: also for counts other than 1).
+    fn shift_imm_flags(&mut self, m: Mnemonic, c: u32) {
+        match m {
+            Mnemonic::Shl => {
+                self.a.lsl_w_imm(T2, T0, c);
+                self.a.ubfx_w(FC, T0, 32 - c, 1);
+            }
+            Mnemonic::Shr => {
+                self.a.lsr_w_imm(T2, T0, c);
+                self.a.ubfx_w(FC, T0, c - 1, 1);
+            }
+            _ => {
+                self.a.asr_w_imm(T2, T0, c);
+                self.a.ubfx_w(FC, T0, c - 1, 1);
+            }
+        }
+        self.shift_of(m);
+        self.a.mov_w(FR, T2);
+    }
+
+    /// OF of a shift into FA: shl = sign(result) ^ CF, shr = sign(source), sar = 0.
+    fn shift_of(&mut self, m: Mnemonic) {
+        match m {
+            Mnemonic::Shl => {
+                self.a.lsr_w_imm(FA, T2, 31);
+                self.a.eor_w(FA, FA, FC);
+            }
+            Mnemonic::Shr => self.a.lsr_w_imm(FA, T0, 31),
+            _ => self.a.mov_w_imm(FA, 0),
+        }
+    }
+
+    /// Host NZCV for a shift result in T2 (K_SHIFT convention) and record the
+    /// lazy descriptor (FR, FC, FA set by shift_imm_flags).
+    fn shift_nzcv(&mut self) {
+        self.a.tst_w(T2, T2); // N, Z; C = V = 0
+        self.a.mrs_nzcv(T1);
+        self.a.mov_w_imm(T3, 1);
+        self.a.eor_w(T3, T3, FC);
+        self.a.orr_w_lsl(T1, T1, T3, 29); // C = !CF
+        self.a.orr_w_lsl(T1, T1, FA, 28); // V = OF
+        self.a.msr_nzcv(T1);
+        self.nzcv = Some(FlagSrc { kind: K_SHIFT, size: 4 });
+        self.dirty = true;
+    }
+
     /// Store the lazy flag descriptor (if flags were produced in this block).
     fn flush_flags(&mut self) {
         if let (true, Some(f)) = (self.dirty, self.nzcv) {
@@ -1121,7 +1180,7 @@ impl Translator {
         use Mnemonic::*;
         let f = self.nzcv?;
         let c = match f.kind {
-            K_SUB => match m {
+            K_SUB | K_SHIFT => match m {
                 Jo | Seto | Cmovo => Cond::Vs,
                 Jno | Setno | Cmovno => Cond::Vc,
                 Jb | Setb | Cmovb => Cond::Lo,
@@ -1514,6 +1573,71 @@ impl Translator {
                 self.store(insn, T0, true);
                 self.a.bind(skip);
                 self.nzcv = None;
+            }
+            Shl | Shr | Sar if flags_live && size == 4 && insn.op1_kind() != OpKind::Register => {
+                let c = insn.immediate(1) as u32 & 31;
+                if c != 0 {
+                    self.load(insn, 0, T0);
+                    self.shift_imm_flags(m, c);
+                    self.store(insn, T2, true);
+                    self.shift_nzcv();
+                }
+            }
+            Shl | Shr | Sar if flags_live && size == 4 && insn.op1_register() == Register::CL => {
+                // count 0 leaves the flags alone: keep them in ctx on both paths
+                self.flush_flags();
+                self.load(insn, 0, T0);
+                self.a.ubfx_w(T1, G[1], 0, 5);
+                let skip = self.a.cbz_w_fixup(T1);
+                match m {
+                    Shl => {
+                        self.a.lslv_w(T2, T0, T1);
+                        self.a.mov_w_imm(T3, 32);
+                        self.a.sub_w(T3, T3, T1);
+                        self.a.lsrv_w(T3, T0, T3);
+                    }
+                    Shr => {
+                        self.a.lsrv_w(T2, T0, T1);
+                        self.a.sub_w_imm(T3, T1, 1);
+                        self.a.lsrv_w(T3, T0, T3);
+                    }
+                    _ => {
+                        self.a.asrv_w(T2, T0, T1);
+                        self.a.sub_w_imm(T3, T1, 1);
+                        self.a.lsrv_w(T3, T0, T3);
+                    }
+                }
+                self.a.ubfx_w(FC, T3, 0, 1);
+                self.shift_of(m);
+                self.store(insn, T2, true);
+                self.a.mov_w(FR, T2);
+                self.a.mov_w_imm(T3, K_SHIFT);
+                self.a.mov_w_imm(T1, 4);
+                self.a.stp_w(T3, T1, CTX, OFF_FKIND);
+                self.a.stp_w(FA, FB, CTX, OFF_FA);
+                self.a.stp_w(FR, FC, CTX, OFF_FRES);
+                self.a.bind(skip);
+                self.nzcv = None;
+                self.dirty = false;
+            }
+            Rol | Ror if !flags_live && size == 4 && insn.op1_kind() != OpKind::Register => {
+                let c = insn.immediate(1) as u32 & 31;
+                if c != 0 {
+                    self.load(insn, 0, T0);
+                    self.a.mov_w_imm(T1, if m == Rol { 32 - c } else { c });
+                    self.a.rorv_w(T0, T0, T1);
+                    self.store(insn, T0, true);
+                }
+            }
+            Rol | Ror if !flags_live && size == 4 && insn.op1_register() == Register::CL => {
+                self.load(insn, 0, T0);
+                self.a.ubfx_w(T1, G[1], 0, 5);
+                if m == Rol {
+                    self.a.mov_w_imm(T2, 32);
+                    self.a.sub_w(T1, T2, T1); // rorv takes the amount mod 32
+                }
+                self.a.rorv_w(T0, T0, T1);
+                self.store(insn, T0, true);
             }
             Imul if !flags_live && insn.op_count() >= 2 && size == 4 => {
                 if insn.op_count() == 3 {
