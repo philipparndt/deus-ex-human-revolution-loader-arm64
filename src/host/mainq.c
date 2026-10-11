@@ -15,7 +15,9 @@
 struct mq_item {
     struct mq_item *next;
     void (^blk)(void);
-    dispatch_semaphore_t done;
+    dispatch_semaphore_t done; // NULL: asynchronous, the item is heap-allocated
+    void (*fn)(void *);        // asynchronous function form (instead of blk)
+    void *ctx;
 };
 
 static pthread_mutex_t mq_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -33,9 +35,29 @@ void mainq_drain(void) {
         }
         pthread_mutex_unlock(&mq_lock);
         if (!it) return;
-        it->blk();
-        dispatch_semaphore_signal(it->done);
+        if (it->fn) it->fn(it->ctx);
+        else it->blk();
+        if (it->done) dispatch_semaphore_signal(it->done);
+        else free(it);
     }
+}
+
+static void mq_push(struct mq_item *it) {
+    pthread_mutex_lock(&mq_lock);
+    *mq_tail = it;
+    mq_tail = &it->next;
+    atomic_fetch_add(&mainq_pending, 1);
+    pthread_mutex_unlock(&mq_lock);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      mainq_drain(); // run loop path (no-op if a thunk entry got there first)
+    });
+}
+
+void mainq_async_f(void *ctx, void (*fn)(void *)) {
+    struct mq_item *it = calloc(1, sizeof *it);
+    it->fn = fn;
+    it->ctx = ctx;
+    mq_push(it);
 }
 
 void mainq_run(void (^blk)(void)) {
@@ -44,14 +66,7 @@ void mainq_run(void (^blk)(void)) {
         return;
     }
     struct mq_item it = {.blk = blk, .done = dispatch_semaphore_create(0)};
-    pthread_mutex_lock(&mq_lock);
-    *mq_tail = &it;
-    mq_tail = &it.next;
-    atomic_fetch_add(&mainq_pending, 1);
-    pthread_mutex_unlock(&mq_lock);
-    dispatch_async(dispatch_get_main_queue(), ^{
-      mainq_drain(); // run loop path (no-op if a thunk entry got there first)
-    });
+    mq_push(&it);
     dispatch_semaphore_wait(it.done, DISPATCH_TIME_FOREVER);
     dispatch_release(it.done);
 }

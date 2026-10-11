@@ -320,8 +320,18 @@ static void show(CBWindow *w) {
 
 THUNK(ShowWindow) {
     CBWindow *w = WIN(0);
+    if (!w) return;
+    // Already visible: no-op, as in Carbon (no reordering). Feral calls this per
+    // frame while walking GetNextWindow; reordering made that walk cycle forever.
+    if (w->visible) {
+        __block bool on_screen;
+        cb_on_main(^{
+          on_screen = [w->ns isVisible] || [w->ns isMiniaturized];
+        });
+        if (on_screen) return;
+    }
     LOGD("carbon: ShowWindow(%#x)", ARG(0));
-    if (w) show(w);
+    show(w);
 }
 THUNK(HideWindow) {
     CBWindow *w = WIN(0);

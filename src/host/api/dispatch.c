@@ -2,6 +2,7 @@
 // handles; guest blocks and function callbacks run on host worker threads.
 #include "blocks.h"
 #include "common.h"
+#include "../mainq.h"
 
 #include <dispatch/dispatch.h>
 #include <pthread.h>
@@ -64,10 +65,30 @@ THUNK(dispatch_get_current_queue) {
 THUNK(dispatch_retain) { dispatch_retain((dispatch_object_t)(dispatch_queue_t)dobj(ARG(0))); }
 THUNK(dispatch_release) { dispatch_release((dispatch_object_t)(dispatch_queue_t)dobj(ARG(0))); }
 
-THUNK(dispatch_async) { dispatch_async_f(DQ(0), BLOCK_CTX(ARG(1)), run_block); }
-THUNK(dispatch_sync) { dispatch_sync_f(DQ(0), BLOCK_CTX(ARG(1)), run_block); }
-THUNK(dispatch_async_f) { dispatch_async_f(DQ(0), fcall_new(ARG(2), ARG(1)), run_fcall); }
-THUNK(dispatch_sync_f) { dispatch_sync_f(DQ(0), fcall_new(ARG(2), ARG(1)), run_fcall); }
+// The guest's main thread may busy-wait without returning to the run loop
+// (Feral's window loop), so main-queue work goes through the main-thread work
+// queue, which is also drained whenever the main thread calls into the host.
+static void q_async(dispatch_queue_t q, void *ctx, void (*fn)(void *)) {
+    if (q == dispatch_get_main_queue()) mainq_async_f(ctx, fn);
+    else dispatch_async_f(q, ctx, fn);
+}
+static void q_sync(dispatch_queue_t q, void *ctx, void (*fn)(void *)) {
+    if (q == dispatch_get_main_queue()) {
+        extern void cgl_drop_held_locks(void), cgl_retake_held_locks(void);
+        cgl_drop_held_locks();
+        mainq_run(^{
+          fn(ctx);
+        });
+        cgl_retake_held_locks();
+    } else {
+        dispatch_sync_f(q, ctx, fn);
+    }
+}
+
+THUNK(dispatch_async) { q_async(DQ(0), BLOCK_CTX(ARG(1)), run_block); }
+THUNK(dispatch_sync) { q_sync(DQ(0), BLOCK_CTX(ARG(1)), run_block); }
+THUNK(dispatch_async_f) { q_async(DQ(0), fcall_new(ARG(2), ARG(1)), run_fcall); }
+THUNK(dispatch_sync_f) { q_sync(DQ(0), fcall_new(ARG(2), ARG(1)), run_fcall); }
 THUNK(dispatch_barrier_async) { dispatch_barrier_async_f(DQ(0), BLOCK_CTX(ARG(1)), run_block); }
 THUNK(dispatch_barrier_sync) { dispatch_barrier_sync_f(DQ(0), BLOCK_CTX(ARG(1)), run_block); }
 // dispatch_after(dispatch_time_t when (64-bit), queue, block)
