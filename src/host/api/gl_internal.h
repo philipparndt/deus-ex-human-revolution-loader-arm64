@@ -31,6 +31,9 @@ enum {
     GLB_COUNT
 };
 
+#define BUF_NOFLUSH 1   // GL_BUFFER_FLUSHING_UNMAP_APPLE == FALSE
+#define BUF_UNDEFINED 2 // contents undefined (glBufferData without data, not written since)
+
 struct glmap {
     GLuint buf;         // buffer name (0 = unused slot)
     void *host;         // real mapping returned by the driver
@@ -53,7 +56,7 @@ struct glctx {
     GLuint cur_vao;
     GLuint *vao_ebo; // element array binding per VAO name
     uint32_t vao_ebo_cap;
-    uint8_t *buf_noflush; // per buffer name: GL_BUFFER_FLUSHING_UNMAP_APPLE == FALSE
+    uint8_t *buf_noflush; // per buffer name: BUF_* flags
     uint32_t buf_noflush_cap;
     struct glmap maps[16];
     struct glstr *strs;

@@ -43,7 +43,7 @@ SPECIAL = {
     "glDeleteVertexArrays", "glMapBuffer", "glMapBufferRange", "glUnmapBuffer",
     "glFlushMappedBufferRange", "glFlushMappedBufferRangeAPPLE", "glBufferParameteriAPPLE",
     "glFenceSync", "glClientWaitSync", "glDeleteSync", "glWaitSync", "glGetSynciv", "glIsSync",
-    "glTexSubImage2D",
+    "glTexSubImage2D", "glBufferData", "glBufferSubData", "glCopyBufferSubData",
 }
 
 # Untyped data pointers that may be buffer offsets instead (see gl_internal.h).

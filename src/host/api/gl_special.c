@@ -201,6 +201,44 @@ THUNK(glDeleteVertexArrays) {
     glDeleteVertexArrays(n, names);
 }
 
+// --- per-buffer flags ------------------------------------------------------------------
+static uint8_t *buf_flags(struct glctx *s, GLuint b) {
+    if (!b) return NULL;
+    if (b >= s->buf_noflush_cap) {
+        uint32_t n = s->buf_noflush_cap ? s->buf_noflush_cap : 256;
+        while (n <= b) n *= 2;
+        s->buf_noflush = realloc(s->buf_noflush, n);
+        memset(s->buf_noflush + s->buf_noflush_cap, 0, n - s->buf_noflush_cap);
+        s->buf_noflush_cap = n;
+    }
+    return &s->buf_noflush[b];
+}
+static bool buf_flag(struct glctx *s, GLuint b, uint8_t f) {
+    return b && b < s->buf_noflush_cap && (s->buf_noflush[b] & f);
+}
+
+THUNK(glBufferData) {
+    GLenum target = ARG(0);
+    glBufferData(target, ARGIPTR(1), ARGP(2), (GLenum)ARG(3));
+    struct glctx *s = gl_cur();
+    uint8_t *f = buf_flags(s, bound_buffer(s, target));
+    if (f) *f = ARG(2) ? (*f & ~BUF_UNDEFINED) : (*f | BUF_UNDEFINED); // orphaned: old contents gone
+}
+THUNK(glBufferSubData) {
+    GLenum target = ARG(0);
+    glBufferSubData(target, ARGIPTR(1), ARGIPTR(2), ARGP(3));
+    struct glctx *s = gl_cur();
+    uint8_t *f = buf_flags(s, bound_buffer(s, target));
+    if (f) *f &= ~BUF_UNDEFINED;
+}
+THUNK(glCopyBufferSubData) {
+    GLenum wt = ARG(1);
+    glCopyBufferSubData((GLenum)ARG(0), wt, ARGIPTR(2), ARGIPTR(3), ARGIPTR(4));
+    struct glctx *s = gl_cur();
+    uint8_t *f = buf_flags(s, bound_buffer(s, wt));
+    if (f) *f &= ~BUF_UNDEFINED;
+}
+
 // --- buffer mapping through guest shadow memory ------------------------------------
 // DXH_GL_STATS=1: every 5 s log map count, time in the driver and bytes copied.
 static struct {
@@ -258,11 +296,13 @@ static gaddr_t map_shadow(GLenum target, void *host, uint32_t off, uint32_t len,
     gaddr_t g = gheap_memalign(64, len ? len : 1);
     if (!g) fatal("gl: out of guest memory for a %u byte buffer mapping", len);
     bool invalidate = access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
-    // Write-only with explicit flushing: only flushed ranges are written back,
-    // so the old contents are never needed (D3D-style dynamic buffers).
-    bool explicit_flush = range ? (access & GL_MAP_FLUSH_EXPLICIT_BIT) != 0
-                                : (buf < s->buf_noflush_cap && s->buf_noflush[buf]);
-    bool copy_in = (access & GL_MAP_READ_BIT) || (!invalidate && !explicit_flush);
+    // The old contents are needed unless they are undefined anyway: invalidating
+    // maps, or a buffer orphaned by glBufferData(NULL) and not written since
+    // (Feral's D3D layer does that before mapping dynamic buffers). Flushed or
+    // unmapped ranges may contain bytes the guest did not write, so a
+    // write-only map still needs the copy otherwise.
+    bool undefined = invalidate || buf_flag(s, buf, BUF_UNDEFINED);
+    bool copy_in = (access & GL_MAP_READ_BIT) || !undefined;
     if (copy_in) {
         uint64_t t0 = mstats_enabled() ? now_ns() : 0;
         memcpy(g2h(g), host, len);
@@ -357,7 +397,7 @@ THUNK(glBufferParameteriAPPLE) {
                 memset(s->buf_noflush + s->buf_noflush_cap, 0, n - s->buf_noflush_cap);
                 s->buf_noflush_cap = n;
             }
-            s->buf_noflush[b] = !param;
+            s->buf_noflush[b] = (uint8_t)((s->buf_noflush[b] & ~BUF_NOFLUSH) | (param ? 0 : BUF_NOFLUSH));
         }
     }
     glBufferParameteriAPPLE(target, pname, param);
@@ -371,7 +411,7 @@ THUNK(glUnmapBuffer) {
     if (m) {
         if (m->access & GL_MAP_WRITE_BIT) {
             bool explicit_flush = m->range ? (m->access & GL_MAP_FLUSH_EXPLICIT_BIT) != 0
-                                           : (b < s->buf_noflush_cap && s->buf_noflush[b]);
+                                           : buf_flag(s, b, BUF_NOFLUSH);
             if (!explicit_flush) {
                 uint64_t t0 = mstats_enabled() ? now_ns() : 0;
                 memcpy(m->host, g2h(m->guest), m->len);
@@ -383,6 +423,7 @@ THUNK(glUnmapBuffer) {
         }
         gheap_free(m->guest);
         memset(m, 0, sizeof *m);
+        if (b < s->buf_noflush_cap) s->buf_noflush[b] &= ~BUF_UNDEFINED; // written now
     } else {
         LOGI("gl: glUnmapBuffer(%#x) without a tracked mapping", target);
     }

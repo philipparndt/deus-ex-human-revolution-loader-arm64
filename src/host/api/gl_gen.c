@@ -28,9 +28,9 @@ THUNK(glBlendEquationSeparate) { glBlendEquationSeparate((GLenum)ARG(0), (GLenum
 THUNK(glBlendFunc) { glBlendFunc((GLenum)ARG(0), (GLenum)ARG(1)); } // gl3.h
 THUNK(glBlendFuncSeparate) { glBlendFuncSeparate((GLenum)ARG(0), (GLenum)ARG(1), (GLenum)ARG(2), (GLenum)ARG(3)); } // gl3.h
 THUNK(glBlitFramebuffer) { glBlitFramebuffer((GLint)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLint)ARG(5), (GLint)ARG(6), (GLint)ARG(7), (GLbitfield)ARG(8), (GLenum)ARG(9)); } // gl3.h
-THUNK(glBufferData) { glBufferData((GLenum)ARG(0), ARGIPTR(1), ARGP(2), (GLenum)ARG(3)); } // gl3.h
+// glBufferData: gl_special.c (gl3.h)
 // glBufferParameteriAPPLE: gl_special.c (glext.h)
-THUNK(glBufferSubData) { glBufferSubData((GLenum)ARG(0), ARGIPTR(1), ARGIPTR(2), ARGP(3)); } // gl3.h
+// glBufferSubData: gl_special.c (gl3.h)
 THUNK(glCheckFramebufferStatus) { RET(glCheckFramebufferStatus((GLenum)ARG(0))); } // gl3.h
 THUNK(glClampColorARB) { glClampColorARB((GLenum)ARG(0), (GLenum)ARG(1)); } // glext.h
 THUNK(glClear) { glClear((GLbitfield)ARG(0)); } // gl3.h
@@ -61,7 +61,7 @@ THUNK(glCompressedTexSubImage2D) { glCompressedTexSubImage2D((GLenum)ARG(0), (GL
 THUNK(glCompressedTexSubImage2DARB) { glCompressedTexSubImage2DARB((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLsizei)ARG(4), (GLsizei)ARG(5), (GLenum)ARG(6), (GLsizei)ARG(7), GLPTR_UNPACK(ARG(8))); } // glext.h
 THUNK(glCompressedTexSubImage3D) { glCompressedTexSubImage3D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLsizei)ARG(5), (GLsizei)ARG(6), (GLsizei)ARG(7), (GLenum)ARG(8), (GLsizei)ARG(9), GLPTR_UNPACK(ARG(10))); } // gl3.h
 THUNK(glCompressedTexSubImage3DARB) { glCompressedTexSubImage3DARB((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLsizei)ARG(5), (GLsizei)ARG(6), (GLsizei)ARG(7), (GLenum)ARG(8), (GLsizei)ARG(9), GLPTR_UNPACK(ARG(10))); } // glext.h
-THUNK(glCopyBufferSubData) { glCopyBufferSubData((GLenum)ARG(0), (GLenum)ARG(1), ARGIPTR(2), ARGIPTR(3), ARGIPTR(4)); } // gl3.h
+// glCopyBufferSubData: gl_special.c (gl3.h)
 THUNK(glCopyTexImage2D) { glCopyTexImage2D((GLenum)ARG(0), (GLint)ARG(1), (GLenum)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLsizei)ARG(5), (GLsizei)ARG(6), (GLint)ARG(7)); } // gl3.h
 THUNK(glCopyTexSubImage2D) { glCopyTexSubImage2D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLint)ARG(5), (GLsizei)ARG(6), (GLsizei)ARG(7)); } // gl3.h
 THUNK(glCreateProgram) { RET(glCreateProgram()); } // gl3.h
