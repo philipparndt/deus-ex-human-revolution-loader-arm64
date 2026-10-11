@@ -1,6 +1,8 @@
 // OpenGL thunks that cannot be generated mechanically: pointer results
 // (glGetString, glMapBuffer), arrays of guest pointers (glShaderSource, ...),
 // GLsync handles and the buffer binding tracking used by gl_gen.c.
+#include <stdatomic.h>
+#include <time.h>
 #include "gl_internal.h"
 
 #include <OpenGL/gl3.h>
@@ -200,6 +202,30 @@ THUNK(glDeleteVertexArrays) {
 }
 
 // --- buffer mapping through guest shadow memory ------------------------------------
+// DXH_GL_STATS=1: every 5 s log map count, time in the driver and bytes copied.
+static struct {
+    _Atomic uint64_t maps, map_ns, in_bytes, out_bytes, copy_ns;
+} mstats;
+static int mstats_on = -1;
+static uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+static void mstats_tick(void) {
+    static uint64_t last;
+    uint64_t t = now_ns();
+    if (!last) last = t;
+    if (t - last < 5000000000ull) return;
+    double sec = (t - last) / 1e9;
+    last = t;
+    uint64_t n = atomic_exchange(&mstats.maps, 0), mt = atomic_exchange(&mstats.map_ns, 0),
+             bi = atomic_exchange(&mstats.in_bytes, 0), bo = atomic_exchange(&mstats.out_bytes, 0),
+             ct = atomic_exchange(&mstats.copy_ns, 0);
+    LOGI("gl stats: %.0f maps/s, driver map %.1f%% core (%.0f us/map), copy %.1f%% core, in %.1f MB/s, out %.1f MB/s",
+         n / sec, mt / sec / 1e7, n ? mt / 1e3 / n : 0, ct / sec / 1e7, bi / sec / 1e6, bo / sec / 1e6);
+}
+static bool mstats_enabled(void) {
+    if (mstats_on < 0) mstats_on = getenv("DXH_GL_STATS") != NULL;
+    return mstats_on;
+}
+
 // The driver's mapping lives in host memory outside the guest's 4 GB window, so
 // the guest gets a shadow copy: filled from the mapping when the guest may read
 // it (or when unwritten bytes must survive), written back on flush / unmap.
@@ -232,7 +258,19 @@ static gaddr_t map_shadow(GLenum target, void *host, uint32_t off, uint32_t len,
     gaddr_t g = gheap_memalign(64, len ? len : 1);
     if (!g) fatal("gl: out of guest memory for a %u byte buffer mapping", len);
     bool invalidate = access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
-    if ((access & GL_MAP_READ_BIT) || !invalidate) memcpy(g2h(g), host, len);
+    // Write-only with explicit flushing: only flushed ranges are written back,
+    // so the old contents are never needed (D3D-style dynamic buffers).
+    bool explicit_flush = range ? (access & GL_MAP_FLUSH_EXPLICIT_BIT) != 0
+                                : (buf < s->buf_noflush_cap && s->buf_noflush[buf]);
+    bool copy_in = (access & GL_MAP_READ_BIT) || (!invalidate && !explicit_flush);
+    if (copy_in) {
+        uint64_t t0 = mstats_enabled() ? now_ns() : 0;
+        memcpy(g2h(g), host, len);
+        if (t0) {
+            atomic_fetch_add(&mstats.copy_ns, now_ns() - t0);
+            atomic_fetch_add(&mstats.in_bytes, len);
+        }
+    }
     *m = (struct glmap){buf, host, g, off, len, access, range};
     LOGT("gl: map buffer %u [%u+%u] access %#x -> guest %#x", buf, off, len, access, g);
     return g;
@@ -250,7 +288,13 @@ THUNK(glMapBuffer) {
     GLenum target = ARG(0), access = ARG(1);
     GLint size = 0;
     glGetBufferParameteriv(target, GL_BUFFER_SIZE, &size);
+    uint64_t t0 = mstats_enabled() ? now_ns() : 0;
     void *host = glMapBuffer(target, access);
+    if (t0) {
+        atomic_fetch_add(&mstats.maps, 1);
+        atomic_fetch_add(&mstats.map_ns, now_ns() - t0);
+        mstats_tick();
+    }
     RET(map_shadow(target, host, 0, (uint32_t)size, legacy_access(access), false));
 }
 
@@ -259,7 +303,13 @@ THUNK(glMapBufferRange) {
     GLintptr off = ARGIPTR(1);
     GLsizeiptr len = ARGIPTR(2);
     GLbitfield access = ARG(3);
+    uint64_t t0 = mstats_enabled() ? now_ns() : 0;
     void *host = glMapBufferRange(target, off, len, access);
+    if (t0) {
+        atomic_fetch_add(&mstats.maps, 1);
+        atomic_fetch_add(&mstats.map_ns, now_ns() - t0);
+        mstats_tick();
+    }
     RET(map_shadow(target, host, (uint32_t)off, (uint32_t)len, access, true));
 }
 
@@ -268,7 +318,12 @@ static void flush_range(struct glmap *m, uint32_t off, uint32_t len) {
         LOGE("gl: flush range %u+%u outside mapping of %u bytes", off, len, m->len);
         return;
     }
+    uint64_t t0 = mstats_enabled() ? now_ns() : 0;
     memcpy((uint8_t *)m->host + off, (uint8_t *)g2h(m->guest) + off, len);
+    if (t0) {
+        atomic_fetch_add(&mstats.copy_ns, now_ns() - t0);
+        atomic_fetch_add(&mstats.out_bytes, len);
+    }
 }
 
 THUNK(glFlushMappedBufferRange) {
@@ -317,7 +372,14 @@ THUNK(glUnmapBuffer) {
         if (m->access & GL_MAP_WRITE_BIT) {
             bool explicit_flush = m->range ? (m->access & GL_MAP_FLUSH_EXPLICIT_BIT) != 0
                                            : (b < s->buf_noflush_cap && s->buf_noflush[b]);
-            if (!explicit_flush) memcpy(m->host, g2h(m->guest), m->len);
+            if (!explicit_flush) {
+                uint64_t t0 = mstats_enabled() ? now_ns() : 0;
+                memcpy(m->host, g2h(m->guest), m->len);
+                if (t0) {
+                    atomic_fetch_add(&mstats.copy_ns, now_ns() - t0);
+                    atomic_fetch_add(&mstats.out_bytes, m->len);
+                }
+            }
         }
         gheap_free(m->guest);
         memset(m, 0, sizeof *m);
