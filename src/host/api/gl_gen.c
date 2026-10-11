@@ -255,7 +255,7 @@ THUNK(glTexStorage1D) { glTexStorage1D((GLenum)ARG(0), (GLsizei)ARG(1), (GLenum)
 THUNK(glTexStorage2D) { glTexStorage2D((GLenum)ARG(0), (GLsizei)ARG(1), (GLenum)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4)); } // gl3ext.h
 THUNK(glTexStorage3D) { glTexStorage3D((GLenum)ARG(0), (GLsizei)ARG(1), (GLenum)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4), (GLsizei)ARG(5)); } // gl3ext.h
 THUNK(glTexSubImage1D) { glTexSubImage1D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLsizei)ARG(3), (GLenum)ARG(4), (GLenum)ARG(5), GLPTR_UNPACK(ARG(6))); } // gl3.h
-THUNK(glTexSubImage2D) { glTexSubImage2D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLsizei)ARG(4), (GLsizei)ARG(5), (GLenum)ARG(6), (GLenum)ARG(7), GLPTR_UNPACK(ARG(8))); } // gl3.h
+// glTexSubImage2D: gl_special.c (gl3.h)
 THUNK(glTexSubImage3D) { glTexSubImage3D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLsizei)ARG(5), (GLsizei)ARG(6), (GLsizei)ARG(7), (GLenum)ARG(8), (GLenum)ARG(9), GLPTR_UNPACK(ARG(10))); } // gl3.h
 // glTransformFeedbackVaryings: gl_special.c (gl3.h)
 THUNK(glTranslatef) { glTranslatef(ARGF(0), ARGF(1), ARGF(2)); } // gl.h

@@ -576,3 +576,41 @@ THUNK(glDeleteSync) {
     if (h - 1 < sync_hint) sync_hint = h - 1;
     pthread_mutex_unlock(&sync_lock);
 }
+
+// --- texture uploads ---------------------------------------------------------------
+// Logs each new (size, format, type) combination once, with the GL error and
+// whether the source data is all zero (diagnoses blank movie textures).
+THUNK(glTexSubImage2D) {
+    GLenum target = ARG(0), format = ARG(6), type = ARG(7);
+    GLsizei w = (GLsizei)ARG(4), h = (GLsizei)ARG(5);
+    const void *pixels = GLPTR_UNPACK(ARG(8));
+    static struct { GLsizei w, h; GLenum f, t; } seen[64];
+    static int nseen;
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    bool first = false;
+    pthread_mutex_lock(&lock);
+    int i;
+    for (i = 0; i < nseen; i++)
+        if (seen[i].w == w && seen[i].h == h && seen[i].f == format && seen[i].t == type) break;
+    if (i == nseen && nseen < 64) {
+        seen[nseen].w = w, seen[nseen].h = h, seen[nseen].f = format, seen[nseen].t = type;
+        nseen++;
+        first = true;
+    }
+    pthread_mutex_unlock(&lock);
+    glTexSubImage2D(target, (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), w, h, format, type, pixels);
+    if (first) {
+        GLenum err = glGetError();
+        GLint row = 0, pbo = 0;
+        glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row);
+        glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &pbo);
+        int nonzero = -1;
+        if (pixels && !pbo && host_ptr_in_guest(pixels)) {
+            const uint8_t *p = pixels;
+            nonzero = 0;
+            for (uint32_t k = 0; k < (uint32_t)w * 2 && !nonzero; k++) nonzero = p[k] != 0;
+        }
+        LOGI("gl: glTexSubImage2D(%#x, %dx%d, format %#x, type %#x, row %d, pbo %d, ptr %#x) err %#x first row nonzero %d",
+             target, w, h, format, type, row, pbo, ARG(8), err, nonzero);
+    }
+}
