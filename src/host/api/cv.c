@@ -69,13 +69,17 @@ THUNK(CVPixelBufferLockBaseAddress) {
     struct pbmirror *m = pb_mirror(pb);
     void *base = CVPixelBufferGetBaseAddress(pb);
     if (m->locks++ == 0 && base && !host_ptr_in_guest(base)) {
+        // The mirror only lives while locked (the guest may only use the base
+        // address then); movie frames would otherwise pin guest memory per buffer.
         uint32_t size = pb_size(pb);
-        if (m->cap < size) {
-            if (m->buf) gheap_free(m->buf);
-            m->buf = gheap_alloc(size);
-            m->cap = size;
+        m->buf = gheap_alloc(size);
+        if (!m->buf) {
+            LOGE("cv: out of guest memory for a %u byte pixel buffer", size);
+            m->locks--;
+            CVPixelBufferUnlockBaseAddress(pb, ARG(1));
+            RET(kCVReturnAllocationFailed);
         }
-        m->size = size;
+        m->cap = m->size = size;
         m->flags = ARG(1);
         memcpy(g2h(m->buf), base, size);
     }
@@ -89,6 +93,11 @@ THUNK(CVPixelBufferUnlockBaseAddress) {
     if (m->locks > 0 && --m->locks == 0 && base && !host_ptr_in_guest(base) && m->buf &&
         !(m->flags & kCVPixelBufferLock_ReadOnly))
         memcpy(base, g2h(m->buf), m->size); // write back guest modifications
+    if (m->locks == 0 && m->buf) {
+        gheap_free(m->buf);
+        m->buf = 0;
+        m->cap = 0;
+    }
     RET(CVPixelBufferUnlockBaseAddress(pb, ARG(1)));
 }
 
