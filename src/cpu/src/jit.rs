@@ -845,6 +845,30 @@ impl Translator {
         }
     }
 
+    /// Turn ARM NaN results of a single-precision op into the x86 ones (FPCR.DN=0):
+    /// a NaN first operand is returned quieted (ARM may prefer an SNaN second
+    /// operand), and invalid operations on non-NaN inputs give the x86 default
+    /// NaN 0xffc00000 instead of 0x7fc00000. `a` = first operand (None for sqrt),
+    /// `b` = second/only source; neither may alias `r`. Uses V2, V5, V6.
+    fn x86_nan_fixup(&mut self, r: u32, a: Option<u32>, b: u32) {
+        debug_assert!(a != Some(r) && b != r);
+        self.a.fcmeq_v(false, V6, b, b); // b not NaN
+        if let Some(a) = a {
+            self.a.fcmeq_v(false, V5, a, a); // a not NaN
+            self.a.vand(V6, V6, V5);
+        }
+        self.a.fcmeq_v(false, V2, r, r);
+        self.a.vbic(V6, V6, V2); // inputs not NaN, result NaN: invalid operation
+        self.a.movi_4s(V2, 0x80, 24);
+        self.a.vand(V6, V6, V2);
+        self.a.vorr(r, r, V6); // default NaN sign
+        if let Some(a) = a {
+            self.a.movi_4s(V2, 0x40, 16);
+            self.a.vorr(V2, a, V2); // quiet(a)
+            self.a.vbif(r, V2, V5); // where a is NaN
+        }
+    }
+
     /// Close the current segment: one NaN check for all its float results.
     fn seg_end(&mut self) {
         let Some(seg) = self.seg.take() else { return };
@@ -1347,7 +1371,8 @@ impl Translator {
             return true;
         }
         match m {
-            Nop => {}
+            // prefetch is only a cache hint (never faults)
+            Nop | Prefetcht0 | Prefetcht1 | Prefetcht2 | Prefetchnta | Prefetchw => {}
             Mov => {
                 self.load(insn, 1, T0);
                 self.store(insn, T0, false);
@@ -1934,6 +1959,25 @@ impl Translator {
                     let vd = self.xmod(d);
                     (vd, vd)
                 };
+                // Single precision: x86 NaN results are produced exactly (x86_nan_fixup),
+                // so no deferred check. The first operand is overwritten by packed ops in
+                // place, keep a copy (also when it is the source register).
+                let exact = !dbl;
+                let (a, b) = if !exact {
+                    (vd, vs)
+                } else if sqrt {
+                    if !scalar && vs == vd {
+                        self.a.vmov(V4, vs); // fsqrt overwrites its own source
+                        (vd, V4)
+                    } else {
+                        (vd, vs)
+                    }
+                } else if scalar {
+                    (vd, vs)
+                } else {
+                    self.a.vmov(V4, vd);
+                    (V4, if vs == vd { V4 } else { vs })
+                };
                 let op = match m {
                     Addps | Addss | Addpd | Addsd => 0,
                     Subps | Subss | Subpd | Subsd => 1,
@@ -1953,8 +1997,12 @@ impl Translator {
                     (3, false) => self.a.fdiv_v(dbl, r, vd, vs),
                     (_, false) => self.a.fsqrt_v(dbl, r, vs),
                 }
-                // scalar ops zero the upper lanes of V0, so a full-width check is fine
-                self.seg_check(dbl, r);
+                if exact {
+                    self.x86_nan_fixup(r, if sqrt { None } else { Some(a) }, b);
+                } else {
+                    // scalar ops zero the upper lanes of V0, so a full-width check is fine
+                    self.seg_check(dbl, r);
+                }
                 if scalar {
                     let vd = self.xmod(d);
                     self.a.ins_elem(if dbl { 3 } else { 2 }, vd, 0, V0, 0);
