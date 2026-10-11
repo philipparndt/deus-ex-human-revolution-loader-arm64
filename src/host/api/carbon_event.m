@@ -11,6 +11,7 @@
 // The application default forwards events that came from AppKit and were not
 // handled by the guest to [NSApp sendEvent:] so AppKit UI keeps working.
 #import "carbon_internal.h"
+#include "mainq.h"
 
 #include <mach/mach_time.h>
 #include <pthread.h>
@@ -61,7 +62,7 @@ void cb_on_main(void (^blk)(void)) {
     else {
         extern void cgl_drop_held_locks(void), cgl_retake_held_locks(void);
         cgl_drop_held_locks(); // see objc_msg.m
-        dispatch_sync(dispatch_get_main_queue(), blk);
+        mainq_run(blk);
         cgl_retake_held_locks();
     }
 }

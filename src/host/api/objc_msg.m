@@ -1,6 +1,7 @@
 // objc_msgSend family, legacy exceptions, properties, synchronisation and
 // fast enumeration for guest code.
 #import "objc_internal.h"
+#include "mainq.h"
 
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
@@ -323,7 +324,7 @@ static void call_host(struct guest_regs *r, id recv, Class lookup_cls, SEL sel, 
             __block NSException *exc = nil;
             extern void cgl_drop_held_locks(void), cgl_retake_held_locks(void);
             cgl_drop_held_locks(); // the main thread may be waiting for them
-            dispatch_sync(dispatch_get_main_queue(), ^{
+            mainq_run(^{
                 @try {
                     marshal_call_host(recv, sel, imp, &mc);
                 } @catch (NSException *e) {

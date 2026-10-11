@@ -243,6 +243,7 @@ struct render_cb {
     gaddr_t flags, ts, abl; // guest scratch: AudioUnitRenderActionFlags, AudioTimeStamp, AudioBufferList
     gaddr_t data;           // guest audio data buffer
     uint32_t data_cap;
+    uint32_t calls;
 };
 
 static OSStatus host_render(void *refcon, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts, UInt32 bus,
@@ -274,6 +275,8 @@ static OSStatus host_render(void *refcon, AudioUnitRenderActionFlags *flags, con
     if (ts) memcpy(g2h(cb->ts), ts, sizeof *ts);
     uint32_t args[6] = {cb->refcon, cb->flags, cb->ts, bus, frames, cb->abl};
     OSStatus st = (OSStatus)cpu_call(cb->proc, 6, args);
+    if (cb->calls++ == 0 || st)
+        if (cb->calls < 4) LOGI("audio: render callback #%u: %u frames, %u buffers, status %d", cb->calls, frames, n, (int)st);
     if (flags) *flags = gread32(cb->flags);
     off = 0;
     for (UInt32 i = 0; i < n; i++) {
@@ -308,9 +311,13 @@ THUNK(AudioUnitSetProperty) {
             hcb.inputProc = host_render;
             hcb.inputProcRefCon = new_render_cb(gread32(p), gread32(p + 4));
         }
-        RET(AudioUnitSetProperty(AU(0), id, ARG(2), ARG(3), &hcb, sizeof hcb));
+        OSStatus st = AudioUnitSetProperty(AU(0), id, ARG(2), ARG(3), &hcb, sizeof hcb);
+        LOGI("audio: render callback %#x on unit %#x = %d", p ? gread32(p) : 0, ARG(0), (int)st);
+        RET(st);
     }
-    RET(AudioUnitSetProperty(AU(0), id, ARG(2), ARG(3), ARG(4) ? ARGP(4) : NULL, ARG(5)));
+    OSStatus st = AudioUnitSetProperty(AU(0), id, ARG(2), ARG(3), ARG(4) ? ARGP(4) : NULL, ARG(5));
+    if (st) LOGI("audio: AudioUnitSetProperty(%#x, id %u, scope %u) = %d", ARG(0), id, ARG(2), (int)st);
+    RET(st);
 }
 
 // AudioUnitGetProperty(unit, id, scope, element, void *data, UInt32 *ioSize)
@@ -333,10 +340,21 @@ THUNK(AudioUnitGetPropertyInfo) {
     if (ARG(5)) gwrite8(ARG(5), w);
     RET(st);
 }
-THUNK(AudioUnitInitialize) { RET(AudioUnitInitialize(AU(0))); }
+THUNK(AudioUnitInitialize) {
+    OSStatus st = AudioUnitInitialize(AU(0));
+    LOGI("audio: AudioUnitInitialize(%#x) = %d", ARG(0), (int)st);
+    RET(st);
+}
 THUNK(AudioUnitUninitialize) { RET(AudioUnitUninitialize(AU(0))); }
-THUNK(AudioOutputUnitStart) { RET(AudioOutputUnitStart(AU(0))); }
-THUNK(AudioOutputUnitStop) { RET(AudioOutputUnitStop(AU(0))); }
+THUNK(AudioOutputUnitStart) {
+    OSStatus st = AudioOutputUnitStart(AU(0));
+    LOGI("audio: AudioOutputUnitStart(%#x) = %d", ARG(0), (int)st);
+    RET(st);
+}
+THUNK(AudioOutputUnitStop) {
+    LOGD("audio: AudioOutputUnitStop(%#x)", ARG(0));
+    RET(AudioOutputUnitStop(AU(0)));
+}
 THUNK(AudioUnitSetParameter) { RET(AudioUnitSetParameter(AU(0), ARG(1), ARG(2), ARG(3), ARGF(4), ARG(5))); }
 THUNK(AudioUnitGetParameter) { RET(AudioUnitGetParameter(AU(0), ARG(1), ARG(2), ARG(3), ARGP(4))); }
 // AudioUnitRender(unit, flags*, const AudioTimeStamp *, bus, frames, AudioBufferList *)

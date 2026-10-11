@@ -1,4 +1,5 @@
 #include "thunk.h"
+#include "mainq.h"
 
 #include "strmap.h"
 
@@ -89,6 +90,7 @@ const char *thunk_name(uint32_t id) { return id < nthunks ? thunks[id].name : "?
 
 void host_dispatch(struct guest_regs *r) {
     uint32_t id = r->thunk_id;
+    if (atomic_load_explicit(&mainq_pending, memory_order_relaxed) && pthread_main_np()) mainq_drain();
     if (id >= nthunks) fatal("bad thunk id %u", id);
     LOGT("-> %s(%#x, %#x, %#x, %#x) ret=%#x", thunks[id].name, gread32(r->esp + 4), gread32(r->esp + 8),
          gread32(r->esp + 12), gread32(r->esp + 16), gread32(r->esp));
