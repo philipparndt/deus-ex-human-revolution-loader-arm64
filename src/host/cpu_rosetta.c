@@ -171,3 +171,8 @@ uint64_t cpu_call(gaddr_t fn, int nargs, const uint32_t *args) {
 }
 
 void cpu_start(gaddr_t eip, gaddr_t esp) { rosetta_jump32(eip, esp); }
+
+bool cpu_crash_regs(uint32_t *eip, uint32_t *esp, uint32_t *ebp, uint32_t regs[8]) {
+    (void)eip, (void)esp, (void)ebp, (void)regs;
+    return false; // the signal context holds the guest registers directly
+}

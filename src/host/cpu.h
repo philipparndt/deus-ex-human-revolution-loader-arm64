@@ -46,6 +46,10 @@ void cpu_call_ex(gaddr_t fn, int nargs, const uint32_t *args, bool fp_ret, struc
 // Jump to the program entry point with esp = initial stack. Does not return.
 _Noreturn void cpu_start(gaddr_t eip, gaddr_t esp);
 
+// For crash reports: fill guest registers of the current thread if the backend
+// knows them (returns false otherwise).
+bool cpu_crash_regs(uint32_t *eip, uint32_t *esp, uint32_t *ebp, uint32_t regs[8]);
+
 // Create a guest code stub that, when called, dispatches to host_dispatch()
 // with r->thunk_id = id.
 gaddr_t cpu_make_stub(uint32_t id);

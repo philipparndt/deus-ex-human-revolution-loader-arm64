@@ -5,6 +5,7 @@
 #include "gmem.h"
 #include "log.h"
 #include "macho.h"
+#include "cpu.h"
 
 #include <signal.h>
 #include <stdio.h>
@@ -64,7 +65,17 @@ static void handler(int sig, siginfo_t *si, void *uctx) {
     if (ss->__rsp < 0x100000000ULL) guest_backtrace((uint32_t)ss->__rsp, (uint32_t)ss->__rbp);
 #else
     (void)uctx;
-    describe("fault", (uint64_t)si->si_addr);
+    uint64_t fa = (uint64_t)si->si_addr;
+    if (host_ptr_in_guest(si->si_addr)) LOGE("  fault in guest memory at guest address %#llx", fa - (uint64_t)guest_base);
+    else describe("fault", fa);
+    uint32_t eip, esp, ebp, gr[8];
+    if (cpu_crash_regs(&eip, &esp, &ebp, gr)) {
+        describe("eip*", eip);
+        LOGE("  (eip* = start of the current translated block; registers may lag)");
+        LOGE("  eax=%08x ecx=%08x edx=%08x ebx=%08x esp=%08x ebp=%08x esi=%08x edi=%08x", gr[0], gr[1], gr[2], gr[3],
+             gr[4], gr[5], gr[6], gr[7]);
+        guest_backtrace(esp, ebp);
+    }
 #endif
     signal(sig, SIG_DFL);
     _exit(128 + sig);

@@ -104,7 +104,13 @@ static bool spin_try(gaddr_t p) {
 THUNK(OSSpinLockTry) { RET(spin_try(ARG(0)) ? 1 : 0); }
 THUNK(OSSpinLockLock) {
     for (int spins = 0; !spin_try(ARG(0)); spins++) {
-        if (spins < 64) __builtin_ia32_pause();
+        if (spins < 64) {
+#if defined(__x86_64__)
+            __builtin_ia32_pause();
+#elif defined(__aarch64__)
+            __asm__ volatile("yield");
+#endif
+        }
         else sched_yield();
     }
 }

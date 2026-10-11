@@ -12,7 +12,8 @@ EXCLUDE ?=
 HOST_SRCS := $(filter-out $(EXCLUDE),$(wildcard src/host/*.c) $(wildcard src/host/api/*.c) $(wildcard src/host/api/*.m))
 
 ROSETTA_DIR ?= build/x86_64
-ROSETTA_OBJS := $(patsubst src/%,$(ROSETTA_DIR)/%.o,$(HOST_SRCS)) $(ROSETTA_DIR)/host/cpu_rosetta_x86_64.S.o
+ROSETTA_SRCS := $(filter-out src/host/cpu_unicorn.c,$(HOST_SRCS))
+ROSETTA_OBJS := $(patsubst src/%,$(ROSETTA_DIR)/%.o,$(ROSETTA_SRCS)) $(ROSETTA_DIR)/host/cpu_rosetta_x86_64.S.o
 ROSETTA_FLAGS := -arch x86_64 -DCPU_BACKEND_ROSETTA
 # Small __PAGEZERO and a high image base keep the low 4 GB free for the guest.
 ROSETTA_LDFLAGS := -arch x86_64 -Wl,-no_pie -Wl,-pagezero_size,0x1000 -Wl,-image_base,0x200000000 \
@@ -54,10 +55,43 @@ $(ROSETTA_DIR)/%.S.o: src/%.S
 	@mkdir -p $(dir $@)
 	$(CC) $(ROSETTA_FLAGS) -c $< -o $@
 
+# --- native arm64 (Unicorn backend) -----------------------------------------
+NATIVE_DIR ?= build/arm64
+UNICORN ?= /opt/homebrew/opt/unicorn
+NATIVE_SRCS := $(filter-out src/host/cpu_rosetta.c,$(HOST_SRCS))
+NATIVE_OBJS := $(patsubst src/%,$(NATIVE_DIR)/%.o,$(NATIVE_SRCS))
+NATIVE_FLAGS := -arch arm64 -DCPU_BACKEND_UNICORN -I$(UNICORN)/include
+NATIVE_LDFLAGS := -arch arm64 -L$(UNICORN)/lib -lunicorn -Wl,-rpath,$(UNICORN)/lib \
+	-framework CoreFoundation -framework Foundation -framework AppKit -framework OpenGL \
+	-framework Carbon -framework IOKit -framework CoreAudio -framework AudioToolbox -framework OpenAL \
+	-framework GameKit -framework StoreKit -framework AVFoundation -framework ScriptingBridge -lffi
+NATIVE_GUEST_LIBS := $(NATIVE_DIR)/guest/libstdc++-i386.a $(NATIVE_DIR)/guest/libunwind-i386.a
+
+native: $(NATIVE_DIR)/dxhost $(NATIVE_GUEST_LIBS)
+
+$(NATIVE_DIR)/dxhost: $(NATIVE_OBJS)
+	$(CC) $(NATIVE_LDFLAGS) $^ -o $@
+
+$(NATIVE_DIR)/%.c.o: src/%.c $(wildcard src/host/*.h) $(wildcard src/host/api/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(NATIVE_FLAGS) $(CFLAGS) -c $< -o $@
+
+$(NATIVE_DIR)/%.m.o: src/%.m $(wildcard src/host/*.h) $(wildcard src/host/api/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(NATIVE_FLAGS) $(CFLAGS) -fno-objc-arc -Wno-deprecated-declarations -c $< -o $@
+
+$(NATIVE_DIR)/guest/libstdc++-i386.a: src/guest/libstdcxx/build/libstdc++-i386.a
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(NATIVE_DIR)/guest/libunwind-i386.a: src/guest/libunwind/build/libunwind-i386.a
+	@mkdir -p $(dir $@)
+	cp $< $@
+
 run: $(ROSETTA_DIR)/dxhost
 	$(ROSETTA_DIR)/dxhost "$(HR_APP)"
 
 clean:
 	rm -rf build
 
-.PHONY: all run clean
+.PHONY: all native run clean
