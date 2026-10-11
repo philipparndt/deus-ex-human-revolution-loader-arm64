@@ -49,3 +49,60 @@ pub extern "C" fn dxcpu_disasm(addr: u32, buf: *mut u8, len: u32) -> u32 {
     }
     insn.len() as u32
 }
+
+/// New zeroed CPU state (flat 32-bit user mode defaults).
+#[unsafe(no_mangle)]
+pub extern "C" fn dxcpu_state_new() -> *mut CpuState {
+    Box::into_raw(Box::new(CpuState::new()))
+}
+
+/// Register access by index: 0-7 = eax..edi, 8 = eip, 9 = eflags,
+/// 10 = fault eip, 11 = fault address.
+#[unsafe(no_mangle)]
+pub extern "C" fn dxcpu_get_reg(st: *const CpuState, idx: u32) -> u32 {
+    let st = unsafe { &*st };
+    match idx {
+        0..=7 => st.gpr[idx as usize],
+        8 => st.eip,
+        9 => st.eflags,
+        10 => st.fault_eip,
+        11 => st.fault_addr,
+        _ => 0,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn dxcpu_set_reg(st: *mut CpuState, idx: u32, v: u32) {
+    let st = unsafe { &mut *st };
+    match idx {
+        0..=7 => st.gpr[idx as usize] = v,
+        8 => st.eip = v,
+        9 => st.eflags = v,
+        _ => {}
+    }
+}
+
+/// Push a value onto the x87 stack (float/double function results).
+#[unsafe(no_mangle)]
+pub extern "C" fn dxcpu_x87_push(st: *mut CpuState, v: f64) {
+    let x = unsafe { &mut (*st).x87 };
+    x.top = (x.top + 7) & 7;
+    x.st[x.top as usize] = v;
+    x.empty &= !(1 << x.top);
+}
+
+/// Pop st(0).
+#[unsafe(no_mangle)]
+pub extern "C" fn dxcpu_x87_pop(st: *mut CpuState) -> f64 {
+    let x = unsafe { &mut (*st).x87 };
+    let v = x.st[x.top as usize];
+    x.empty |= 1 << x.top;
+    x.top = (x.top + 1) & 7;
+    v
+}
+
+/// Executed instruction count of this state (statistics).
+#[unsafe(no_mangle)]
+pub extern "C" fn dxcpu_icount(st: *const CpuState) -> u64 {
+    unsafe { (*st).icount }
+}
