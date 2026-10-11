@@ -424,7 +424,14 @@ static void generic_call(struct guest_regs *r, void *host, const struct mref *re
     case 'c': LOGD("steam: %s -> %u", ref->name, (unsigned)(uint8_t)rv.a); RET((uint8_t)rv.a);
     case 'q': LOGD("steam: %s -> %#llx", ref->name, (unsigned long long)rv.u64); RET64(rv.u64);
     case 'f': RETD(rv.f);
-    case 'S': LOGD("steam: %s -> \"%s\"", ref->name, rv.p ? (const char *)rv.p : "(null)"); RET(intern_string(rv.p));
+    case 'S': {
+        // DXH_LANGUAGE=german etc. overrides the game language Steam reports
+        // (Feral picks speech and text language from it).
+        const char *lang = getenv("DXH_LANGUAGE");
+        if (lang && *lang && !strcmp(ref->name, "GetCurrentGameLanguage")) rv.p = (void *)lang;
+        LOGD("steam: %s -> \"%s\"", ref->name, rv.p ? (const char *)rv.p : "(null)");
+        RET(intern_string(rv.p));
+    }
     case 'P': RET(version ? wrap_iface(rv.p, version) : 0);
     }
 }
