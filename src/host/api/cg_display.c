@@ -410,11 +410,20 @@ static volatile bool frame_press;  // left button went down on a window frame
 static volatile bool grab_pending; // the game asked for a grab during that press
 static volatile bool grabbed;      // mouse dissociated by the game
 
-static bool grab_blocked(void) {
-    if (!frame_press) return false;
-    if (CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) return true;
-    frame_press = false; // released: the drag is over
-    return false;
+// After a frame press the mouse stays free until the next click into the game
+// (as windowed games usually behave), not just until the button is released.
+static bool grab_blocked(void) { return frame_press; }
+
+// carbon_event.m: a mouse-down inside a window's content.
+void cg_mouse_content_press(void) {
+    if (!frame_press) return;
+    frame_press = false;
+    if (grab_pending) {
+        grab_pending = false;
+        LOGD("cg: deferred mouse grab applied (click into the game)");
+        CGAssociateMouseAndMouseCursorPosition(false);
+        grabbed = true;
+    }
 }
 
 // carbon_event.m: a mouse-down on the title bar/frame goes to AppKit.
@@ -431,21 +440,14 @@ void cg_mouse_frame_press(void) {
 // (often a title bar click) starts ungrabbed.
 void cg_mouse_app_deactivated(void) {
     grab_pending = false;
+    frame_press = false;
     if (grabbed) {
         grabbed = false;
         CGAssociateMouseAndMouseCursorPosition(true);
     }
 }
 
-// Apply a deferred grab once the drag is over (called from the per-frame mouse calls).
-static void grab_resume(void) {
-    if (grab_pending && !grab_blocked()) {
-        grab_pending = false;
-        LOGD("cg: deferred mouse grab applied");
-        CGAssociateMouseAndMouseCursorPosition(false);
-        grabbed = true;
-    }
-}
+static void grab_resume(void) {} // deferred grabs are applied by cg_mouse_content_press
 
 THUNK(CGWarpMouseCursorPosition) {
     CGPoint p = ARGPOINT(0);

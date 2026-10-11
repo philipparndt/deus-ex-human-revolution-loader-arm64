@@ -929,6 +929,8 @@ static bool translate(NSEvent *e) {
             if ([e type] == NSEventTypeLeftMouseDown) cg_mouse_frame_press();
             return false;
         }
+        extern void cg_mouse_content_press(void); // cg_display.c: grab again after a drag
+        cg_mouse_content_press();
         c = cb_event_new(kEventClassMouse, kEventMouseDown, when);
         set_mouse_params(c, e);
         break;
