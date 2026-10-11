@@ -484,8 +484,9 @@ fn shift(st: &mut CpuState, insn: &Instruction) -> ExecResult {
         _ => return Err(Exit::Unimplemented),
     }
     write_op(st, insn, 0, r);
+    // AF is undefined after shifts; 0 (the JIT's lazy flags cannot keep the old AF)
     let f = szp(size, r) | (if cf { CF } else { 0 }) | (if of { OF } else { 0 });
-    set_flags(st, ARITH & !AF, f);
+    set_flags(st, ARITH, f);
     Ok(Step::Next)
 }
 
@@ -511,7 +512,7 @@ fn shld_shrd(st: &mut CpuState, insn: &Instruction) {
     let r = r as u32;
     write_op(st, insn, 0, r);
     let of = ((r ^ a as u32) & sign_bit(size)) != 0;
-    set_flags(st, ARITH & !AF, szp(size, r) | (if cf { CF } else { 0 }) | (if of { OF } else { 0 }));
+    set_flags(st, ARITH, szp(size, r) | (if cf { CF } else { 0 }) | (if of { OF } else { 0 })); // AF undefined: 0
 }
 
 fn bit_op(st: &mut CpuState, insn: &Instruction) {

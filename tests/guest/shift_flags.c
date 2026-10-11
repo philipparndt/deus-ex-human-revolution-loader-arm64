@@ -10,785 +10,977 @@ static void mix(uint32_t v) { h = (h ^ v) * 16777619u; }
 #define CC_OF 0xc00fu   /* setcc bits that read OF: o no l ge le g */
 static void t_shll_0(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $0, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $0, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $0, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $0, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_1(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $1, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $1, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & FLAGMASK);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $1, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $1, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc);
 }
 static void t_shll_2(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $2, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $2, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $2, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $2, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_3(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $3, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $3, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $3, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $3, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_4(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $4, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $4, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $4, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $4, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_5(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $5, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $5, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $5, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $5, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_6(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $6, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $6, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $6, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $6, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_7(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $7, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $7, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $7, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $7, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_8(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $8, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $8, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $8, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $8, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_9(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $9, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $9, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $9, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $9, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_10(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $10, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $10, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $10, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $10, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_11(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $11, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $11, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $11, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $11, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_12(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $12, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $12, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $12, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $12, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_13(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $13, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $13, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $13, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $13, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_14(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $14, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $14, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $14, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $14, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_15(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $15, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $15, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $15, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $15, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_16(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $16, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $16, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $16, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $16, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_17(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $17, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $17, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $17, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $17, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_18(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $18, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $18, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $18, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $18, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_19(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $19, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $19, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $19, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $19, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_20(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $20, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $20, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $20, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $20, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_21(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $21, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $21, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $21, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $21, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_22(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $22, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $22, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $22, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $22, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_23(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $23, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $23, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $23, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $23, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_24(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $24, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $24, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $24, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $24, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_25(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $25, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $25, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $25, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $25, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_26(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $26, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $26, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $26, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $26, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_27(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $27, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $27, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $27, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $27, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_28(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $28, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $28, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $28, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $28, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_29(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $29, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $29, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $29, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $29, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_30(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $30, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $30, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $30, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $30, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_31(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shll $31, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shll $31, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shll $31, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shll $31, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shll_cl(uint32_t v, uint32_t n) {
     uint32_t r = v, fl;
-    __asm__ volatile("shll %%cl, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : "c"(n) : "cc");
+    __asm__ volatile("testl %0, %0; shll %%cl, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : "c"(n) : "cc");
     mix(r); mix(fl & ((n & 31) == 1 ? FLAGMASK : NO_OF));
 }
 static void t_shrl_0(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $0, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $0, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $0, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $0, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_1(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $1, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $1, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & FLAGMASK);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $1, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $1, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc);
 }
 static void t_shrl_2(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $2, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $2, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $2, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $2, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_3(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $3, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $3, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $3, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $3, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_4(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $4, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $4, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $4, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $4, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_5(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $5, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $5, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $5, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $5, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_6(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $6, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $6, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $6, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $6, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_7(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $7, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $7, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $7, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $7, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_8(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $8, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $8, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $8, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $8, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_9(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $9, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $9, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $9, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $9, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_10(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $10, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $10, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $10, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $10, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_11(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $11, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $11, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $11, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $11, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_12(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $12, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $12, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $12, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $12, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_13(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $13, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $13, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $13, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $13, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_14(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $14, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $14, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $14, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $14, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_15(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $15, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $15, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $15, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $15, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_16(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $16, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $16, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $16, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $16, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_17(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $17, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $17, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $17, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $17, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_18(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $18, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $18, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $18, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $18, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_19(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $19, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $19, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $19, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $19, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_20(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $20, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $20, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $20, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $20, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_21(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $21, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $21, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $21, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $21, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_22(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $22, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $22, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $22, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $22, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_23(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $23, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $23, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $23, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $23, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_24(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $24, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $24, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $24, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $24, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_25(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $25, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $25, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $25, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $25, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_26(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $26, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $26, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $26, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $26, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_27(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $27, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $27, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $27, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $27, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_28(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $28, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $28, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $28, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $28, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_29(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $29, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $29, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $29, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $29, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_30(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $30, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $30, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $30, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $30, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_31(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("shrl $31, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; shrl $31, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; shrl $31, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; shrl $31, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_shrl_cl(uint32_t v, uint32_t n) {
     uint32_t r = v, fl;
-    __asm__ volatile("shrl %%cl, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : "c"(n) : "cc");
+    __asm__ volatile("testl %0, %0; shrl %%cl, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : "c"(n) : "cc");
     mix(r); mix(fl & ((n & 31) == 1 ? FLAGMASK : NO_OF));
 }
 static void t_sarl_0(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $0, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $0, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $0, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $0, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_1(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $1, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $1, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & FLAGMASK);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $1, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $1, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc);
 }
 static void t_sarl_2(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $2, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $2, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $2, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $2, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_3(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $3, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $3, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $3, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $3, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_4(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $4, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $4, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $4, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $4, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_5(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $5, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $5, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $5, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $5, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_6(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $6, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $6, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $6, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $6, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_7(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $7, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $7, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $7, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $7, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_8(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $8, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $8, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $8, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $8, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_9(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $9, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $9, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $9, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $9, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_10(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $10, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $10, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $10, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $10, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_11(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $11, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $11, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $11, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $11, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_12(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $12, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $12, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $12, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $12, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_13(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $13, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $13, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $13, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $13, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_14(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $14, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $14, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $14, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $14, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_15(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $15, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $15, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $15, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $15, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_16(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $16, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $16, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $16, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $16, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_17(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $17, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $17, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $17, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $17, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_18(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $18, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $18, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $18, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $18, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_19(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $19, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $19, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $19, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $19, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_20(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $20, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $20, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $20, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $20, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_21(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $21, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $21, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $21, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $21, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_22(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $22, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $22, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $22, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $22, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_23(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $23, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $23, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $23, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $23, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_24(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $24, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $24, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $24, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $24, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_25(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $25, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $25, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $25, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $25, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_26(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $26, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $26, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $26, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $26, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_27(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $27, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $27, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $27, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $27, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_28(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $28, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $28, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $28, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $28, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_29(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $29, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $29, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $29, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $29, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_30(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $30, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $30, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $30, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $30, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_31(uint32_t v) {
     uint32_t r = v, fl, cc = 0;
-    __asm__ volatile("sarl $31, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
+    __asm__ volatile("testl %0, %0; sarl $31, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : : "cc");
     mix(r); mix(fl & NO_OF);
     r = v;
-    __asm__ volatile("xor %%ecx, %%ecx; cmp $1, %%ecx; sarl $31, %1; mov $0, %%eax; " "seto %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setno %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setb %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setae %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sete %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setne %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setbe %%al; shl $1, %%ecx; or %%eax, %%ecx; " "seta %%al; shl $1, %%ecx; or %%eax, %%ecx; " "sets %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setns %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setnp %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setl %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setge %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setle %%al; shl $1, %%ecx; or %%eax, %%ecx; " "setg %%al; shl $1, %%ecx; or %%eax, %%ecx; "  : "=c"(cc), "+r"(r) : : "eax", "cc");
+    { uint8_t cb[16];
+    __asm__ volatile("xorl %%eax, %%eax; cmpl $1, %%eax; sarl $31, %0; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+r"(r) : "D"(cb) : "eax", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
     mix(cc & ~CC_OF);
 }
 static void t_sarl_cl(uint32_t v, uint32_t n) {
     uint32_t r = v, fl;
-    __asm__ volatile("sarl %%cl, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : "c"(n) : "cc");
+    __asm__ volatile("testl %0, %0; sarl %%cl, %0; pushf; pop %1" : "+r"(r), "=r"(fl) : "c"(n) : "cc");
     mix(r); mix(fl & ((n & 31) == 1 ? FLAGMASK : NO_OF));
 }
 static void t_rot(uint32_t v, uint32_t n) {

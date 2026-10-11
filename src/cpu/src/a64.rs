@@ -410,6 +410,22 @@ impl Asm {
         self.emit(0x4a40_0000 | (rm << 16) | (sh << 10) | (rn << 5) | rd);
     }
     /// cmp xn, wm, sxtw
+    /// ldaddal ws, wt, [xn]: wt = old [xn]; [xn] = old + ws (atomic, acquire-release)
+    pub fn ldaddal_w(&mut self, ws: u32, wt: u32, xn: u32) {
+        self.emit(0xb8e0_0000 | (ws << 16) | (xn << 5) | wt);
+    }
+    /// casal ws, wt, [xn]: if [xn] == ws then [xn] = wt; ws = old [xn] (atomic, acquire-release)
+    pub fn casal_w(&mut self, ws: u32, wt: u32, xn: u32) {
+        self.emit(0x88e0_fc00 | (ws << 16) | (xn << 5) | wt);
+    }
+    /// sxtw xd, wn
+    pub fn sxtw_x(&mut self, rd: u32, rn: u32) {
+        self.emit(0x9340_7c00 | (rn << 5) | rd);
+    }
+    /// orr xd, xn, xm, lsl #sh
+    pub fn orr_x_lsl(&mut self, rd: u32, rn: u32, rm: u32, sh: u32) {
+        self.emit(0xaa00_0000 | (rm << 16) | (sh << 10) | (rn << 5) | rd);
+    }
     pub fn cmp_x_sxtw(&mut self, xn: u32, wm: u32) {
         self.emit(0xeb20_c000 | (wm << 16) | (xn << 5) | XZR);
     }

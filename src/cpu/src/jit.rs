@@ -70,10 +70,14 @@ pub const K_SUB: u32 = 2;
 pub const K_LOGIC: u32 = 3;
 pub const K_INC: u32 = 4;
 pub const K_DEC: u32 = 5;
-/// Shifts: fres = result, fcf = CF, fa = OF; SF/ZF/PF from the result, AF unchanged.
+/// Shifts: fres = result, fcf = CF, fa = OF; SF/ZF/PF from the result, AF = 0 (undefined).
 /// In registers the host NZCV holds N/Z of the result, C = !CF, V = OF (the K_SUB
 /// convention, so conditions map the same way).
 pub const K_SHIFT: u32 = 7;
+/// adc / sbb: fa, fb = operands, fres = result, fcf = CF out (carry in folded in).
+/// Registers: K_ADD / K_SUB NZCV conventions.
+pub const K_ADC: u32 = 8;
+pub const K_SBB: u32 = 9;
 /// Translator-internal: host NZCV holds the result of an FCMP (ucomiss & co).
 /// Never stored in JitCtx (materialised to EFLAGS on flush).
 const K_FCMP: u32 = 6;
@@ -127,6 +131,7 @@ const OFF_FRES: u32 = 56;
 const OFF_FCF: u32 = 60;
 const OFF_BASE: u32 = 64;
 const OFF_HELPER_INTERP: u32 = 72;
+const OFF_HELPER_FLAGS: u32 = 80;
 const OFF_HELPER_COND: u32 = 88;
 const OFF_STATE: u32 = 96;
 const OFF_IBTC: u32 = 120;
@@ -167,13 +172,19 @@ impl JitCtx {
             K_LOGIC => interp::logic_flags(size, self.fres),
             K_INC => (interp::add_flags(size, self.fa, 1, 0).1 & !CF) | (self.fcf & CF),
             K_DEC => (interp::sub_flags(size, self.fa, 1, 0).1 & !CF) | (self.fcf & CF),
-            K_SHIFT => {
-                let f = (interp::logic_flags(size, self.fres) & !(CF | OF))
+            K_ADC | K_SBB => {
+                let (a, b, r) = (self.fa, self.fb, self.fres);
+                let sign = 1u32 << (size * 8 - 1);
+                let of = if self.fkind == K_ADC { (a ^ r) & (b ^ r) } else { (a ^ b) & (a ^ r) } & sign;
+                (interp::logic_flags(size, r) & !(CF | OF))
                     | (self.fcf & CF)
-                    | if self.fa & 1 != 0 { OF } else { 0 };
-                self.eflags = (self.eflags & !(ARITH & !AF)) | f;
-                self.fkind = K_MAT;
-                return;
+                    | ((a ^ b ^ r) & AF)
+                    | if of != 0 { OF } else { 0 }
+            }
+            K_SHIFT => {
+                (interp::logic_flags(size, self.fres) & !(CF | OF))
+                    | (self.fcf & CF)
+                    | if self.fa & 1 != 0 { OF } else { 0 }
             }
             _ => 0,
         };
@@ -938,6 +949,33 @@ impl Translator {
         self.a.mov_w(FR, T2);
     }
 
+    /// Lazy add flags for a = old value (register), b = addend (register).
+    fn set_add_flags(&mut self, flags_live: bool, a: u32, b: u32) {
+        if flags_live {
+            self.a.mov_w(FA, a);
+            self.a.mov_w(FB, b);
+            self.a.adds_w(FR, FA, FB);
+            self.nzcv = Some(FlagSrc { kind: K_ADD, size: 4 });
+            self.dirty = true;
+        } else {
+            self.nzcv = None;
+            self.dirty = false;
+        }
+    }
+
+    /// x86 CF (0/1) into FC, from wherever the current flags live.
+    fn cf_to_fc(&mut self) {
+        match self.nzcv {
+            Some(f) if matches!(f.kind, K_SUB | K_SBB | K_SHIFT) => self.a.cset_w(FC, Cond::Lo),
+            Some(f) if matches!(f.kind, K_ADD | K_ADC) => self.a.cset_w(FC, Cond::Hs),
+            Some(f) if f.kind == K_LOGIC => self.a.mov_w_imm(FC, 0),
+            Some(f) if f.kind == K_FCMP => self.a.cset_w(FC, Cond::Lt),
+            Some(_) => {} // inc/dec: FC holds CF
+            None if self.fc_cf => {}
+            None => self.load_cf_from_ctx(),
+        }
+    }
+
     /// OF of a shift into FA: shl = sign(result) ^ CF, shr = sign(source), sar = 0.
     fn shift_of(&mut self, m: Mnemonic) {
         match m {
@@ -1180,7 +1218,7 @@ impl Translator {
         use Mnemonic::*;
         let f = self.nzcv?;
         let c = match f.kind {
-            K_SUB | K_SHIFT => match m {
+            K_SUB | K_SHIFT | K_SBB => match m {
                 Jo | Seto | Cmovo => Cond::Vs,
                 Jno | Setno | Cmovno => Cond::Vc,
                 Jb | Setb | Cmovb => Cond::Lo,
@@ -1197,7 +1235,7 @@ impl Translator {
                 Jg | Setg | Cmovg => Cond::Gt,
                 _ => return None,
             },
-            K_ADD => match m {
+            K_ADD | K_ADC => match m {
                 Jo | Seto | Cmovo => Cond::Vs,
                 Jno | Setno | Cmovno => Cond::Vc,
                 Jb | Setb | Cmovb => Cond::Hs,
@@ -1410,7 +1448,11 @@ impl Translator {
         }
         self.seg_end();
         // Instructions with prefixes we do not model natively go to the interpreter.
-        if insn.has_lock_prefix() || insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix()
+        let lock_ok = matches!(m, Xadd | Cmpxchg)
+            && size == 4
+            && insn.op0_kind() == OpKind::Memory
+            && insn.op1_kind() == OpKind::Register;
+        if (insn.has_lock_prefix() && !lock_ok) || insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix()
             || insn.segment_prefix() == Register::FS || insn.segment_prefix() == Register::GS
         {
             return self.fallback(insn);
@@ -1638,6 +1680,180 @@ impl Translator {
                 }
                 self.a.rorv_w(T0, T0, T1);
                 self.store(insn, T0, true);
+            }
+            // atomic on ARM via LSE (also without lock: one location, same result)
+            Xadd if size == 4 && insn.op0_kind() == OpKind::Memory && insn.op1_kind() == OpKind::Register => {
+                let src = gr(insn.op1_register());
+                self.ea(insn);
+                self.a.add_x(T5, BASE, T4);
+                self.a.ldaddal_w(src, T0, T5); // T0 = old
+                self.set_add_flags(flags_live, T0, src);
+                self.a.mov_w(src, T0);
+            }
+            Cmpxchg if size == 4 && insn.op0_kind() == OpKind::Memory && insn.op1_kind() == OpKind::Register => {
+                // EAX gets the old value either way (equal: it already holds it); flags = cmp eax, old
+                let src = gr(insn.op1_register());
+                self.ea(insn);
+                self.a.add_x(T5, BASE, T4);
+                self.a.mov_w(T0, G[EAX]);
+                self.a.casal_w(T0, src, T5); // T0 = old
+                if flags_live {
+                    self.a.mov_w(FA, G[EAX]);
+                    self.a.mov_w(FB, T0);
+                    self.a.subs_w(FR, FA, FB);
+                    self.nzcv = Some(FlagSrc { kind: K_SUB, size: 4 });
+                    self.dirty = true;
+                } else {
+                    self.nzcv = None;
+                    self.dirty = false;
+                }
+                self.a.mov_w(G[EAX], T0);
+            }
+            Adc | Sbb if size == 4 => {
+                self.cf_to_fc();
+                self.load(insn, 0, T0);
+                self.load_keep_ea(insn, 1, T1);
+                if m == Adc {
+                    self.a.subs_w_imm(XZR, FC, 1); // C = CF
+                    self.a.adcs_w(T2, T0, T1);
+                } else {
+                    self.a.mov_w_imm(T3, 1);
+                    self.a.eor_w(T3, T3, FC);
+                    self.a.subs_w_imm(XZR, T3, 1); // C = !CF (ARM borrow convention)
+                    self.a.sbcs_w(T2, T0, T1);
+                }
+                self.a.cset_w(FC, if m == Adc { Cond::Hs } else { Cond::Lo });
+                self.store(insn, T2, true);
+                if flags_live {
+                    self.a.mov_w(FA, T0);
+                    self.a.mov_w(FB, T1);
+                    self.a.mov_w(FR, T2);
+                    self.nzcv = Some(FlagSrc { kind: if m == Adc { K_ADC } else { K_SBB }, size: 4 });
+                    self.dirty = true;
+                } else {
+                    self.nzcv = None;
+                    self.dirty = false;
+                }
+            }
+            Shld | Shrd if size == 4 && insn.op1_kind() == OpKind::Register && insn.op2_kind() == OpKind::Immediate8 => {
+                let c = insn.immediate8() as u32 & 31;
+                if c != 0 {
+                    let b = gr(insn.op1_register());
+                    self.load(insn, 0, T0);
+                    if m == Shld {
+                        self.a.lsl_w_imm(T2, T0, c);
+                        self.a.lsr_w_imm(T3, b, 32 - c);
+                        self.a.ubfx_w(FC, T0, 32 - c, 1);
+                    } else {
+                        self.a.lsr_w_imm(T2, T0, c);
+                        self.a.lsl_w_imm(T3, b, 32 - c);
+                        self.a.ubfx_w(FC, T0, c - 1, 1);
+                    }
+                    self.a.orr_w(T2, T2, T3);
+                    self.a.eor_w(T3, T2, T0);
+                    self.a.lsr_w_imm(FA, T3, 31); // OF: sign changed
+                    self.store(insn, T2, true);
+                    if flags_live {
+                        self.a.mov_w(FR, T2);
+                        self.shift_nzcv();
+                    } else {
+                        self.nzcv = None;
+                        self.dirty = false;
+                    }
+                }
+            }
+            Shld | Shrd if size == 4 && insn.op1_kind() == OpKind::Register && insn.op2_register() == Register::CL => {
+                self.flush_flags();
+                let b = gr(insn.op1_register());
+                self.load(insn, 0, T0);
+                self.a.ubfx_w(T1, G[1], 0, 5);
+                let skip = self.a.cbz_w_fixup(T1);
+                self.a.mov_w_imm(T3, 32);
+                self.a.sub_w(T3, T3, T1); // 32 - c
+                if m == Shld {
+                    self.a.lslv_w(T2, T0, T1);
+                    self.a.lsrv_w(FB, b, T3);
+                    self.a.lsrv_w(FC, T0, T3);
+                } else {
+                    self.a.lsrv_w(T2, T0, T1);
+                    self.a.lslv_w(FB, b, T3);
+                    self.a.sub_w_imm(T3, T1, 1);
+                    self.a.lsrv_w(FC, T0, T3);
+                }
+                self.a.orr_w(T2, T2, FB);
+                self.a.ubfx_w(FC, FC, 0, 1);
+                self.a.eor_w(T3, T2, T0);
+                self.a.lsr_w_imm(FA, T3, 31);
+                self.store(insn, T2, true);
+                self.a.mov_w(FR, T2);
+                self.a.mov_w_imm(T3, K_SHIFT);
+                self.a.mov_w_imm(T1, 4);
+                self.a.stp_w(T3, T1, CTX, OFF_FKIND);
+                self.a.stp_w(FA, FB, CTX, OFF_FA);
+                self.a.stp_w(FR, FC, CTX, OFF_FRES);
+                self.a.bind(skip);
+                self.nzcv = None;
+                self.dirty = false;
+            }
+            Div | Idiv if size == 4 && insn.op_count() == 1 => {
+                // #DE cases (zero divisor, quotient overflow) go to the interpreter.
+                self.flush_flags();
+                self.xmm_spill();
+                self.load(insn, 0, T1);
+                let zero = self.a.cbz_w_fixup(T1);
+                self.a.mov_w(T0, G[EAX]);
+                self.a.orr_x_lsl(T0, T0, G[EDX], 32); // edx:eax
+                let overflow;
+                if m == Div {
+                    self.a.udiv_x(T2, T0, T1);
+                    self.a.lsr_x_imm(T3, T2, 32);
+                    let ok = self.a.cbz_x_fixup(T3);
+                    overflow = self.a.b_fixup();
+                    self.a.bind(ok);
+                    self.a.msub_x(T3, T2, T1, T0);
+                } else {
+                    self.a.sxtw_x(T5, T1);
+                    self.a.sdiv_x(T2, T0, T5);
+                    self.a.cmp_x_sxtw(T2, T2);
+                    overflow = self.a.bcond_fixup(Cond::Ne);
+                    self.a.msub_x(T3, T2, T5, T0);
+                }
+                self.a.mov_w(G[EAX], T2);
+                self.a.mov_w(G[EDX], T3);
+                let done = self.a.b_fixup();
+                self.a.bind(zero);
+                self.a.bind(overflow);
+                let cont = self.fallback(insn);
+                debug_assert!(cont);
+                self.a.bind(done);
+                self.nzcv = None;
+                self.dirty = false;
+            }
+            Bt if size == 4 && !(insn.op0_kind() == OpKind::Memory && insn.op1_kind() == OpKind::Register) => {
+                if flags_live {
+                    // CF = bit; ZF unchanged (others undefined): materialise, then set CF
+                    self.flush_flags();
+                    self.xmm_spill();
+                    self.a.ldr_imm(2, T0, CTX, OFF_FKIND);
+                    let mat = self.a.cbz_w_fixup(T0);
+                    self.a.mov_x(0, CTX);
+                    self.a.ldr_imm(3, 16, CTX, OFF_HELPER_FLAGS);
+                    self.a.blr(16);
+                    self.a.bind(mat);
+                    self.load(insn, 0, T0);
+                    if insn.op1_kind() == OpKind::Register {
+                        self.a.ubfx_w(T2, gr(insn.op1_register()), 0, 5);
+                        self.a.lsrv_w(T1, T0, T2);
+                    } else {
+                        self.a.lsr_w_imm(T1, T0, insn.immediate8() as u32 & 31);
+                    }
+                    self.a.ldr_imm(2, T2, CTX, OFF_EFLAGS);
+                    self.a.bfi_w(T2, T1, 0, 1);
+                    self.a.str_imm(2, T2, CTX, OFF_EFLAGS);
+                    self.nzcv = None;
+                    self.dirty = false;
+                    self.fc_cf = false;
+                }
             }
             Imul if !flags_live && insn.op_count() >= 2 && size == 4 => {
                 if insn.op_count() == 3 {
