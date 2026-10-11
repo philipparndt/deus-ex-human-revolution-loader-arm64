@@ -202,7 +202,14 @@ THUNK(CFStringAppendCharacters) { CFStringAppendCharacters(MS(0), ARGP(1), ARGID
 THUNK(CFStringAppendPascalString) { CFStringAppendPascalString(MS(0), ARGP(1), ARG(2)); }
 THUNK(CFStringInsert) { CFStringInsert(MS(0), ARGIDX(1), S(2)); }
 THUNK(CFStringDelete) { CFStringDelete(MS(0), ARGRANGE(1)); }
-THUNK(CFStringReplace) { CFStringReplace(MS(0), ARGRANGE(1), S(3)); }
+THUNK(CFStringReplace) {
+    // Old CF clamped out-of-range replacements; the game relies on it.
+    CFRange rg = ARGRANGE(1);
+    CFIndex len = CFStringGetLength(MS(0));
+    if (rg.location > len) rg.location = len;
+    if (rg.location + rg.length > len) rg.length = len - rg.location;
+    CFStringReplace(MS(0), rg, S(3));
+}
 THUNK(CFStringReplaceAll) { CFStringReplaceAll(MS(0), S(1)); }
 THUNK(CFStringFindAndReplace) {
     // (s, find, replace, range, options)

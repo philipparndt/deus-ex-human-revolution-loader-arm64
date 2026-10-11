@@ -51,6 +51,7 @@ THUNK(CFRunLoopContainsObserver) {
 struct gcallout {
     gaddr_t fn;
     struct gcf_context ctx;
+    int refs;
 };
 static struct gcallout *new_callout(gaddr_t fn, gaddr_t ctx) {
     struct gcallout *c = calloc(1, sizeof *c);
@@ -202,8 +203,8 @@ static void write_client_cb(CFWriteStreamRef s, CFStreamEventType ev, void *info
     struct gcallout *c = info;
     gcall3(c->fn, cfg(s), (uint32_t)ev, c->ctx.info);
 }
-static void *stream_retain(void *info) { return info; }
-static void stream_release(void *info) { callout_release(info); }
+static void *stream_retain(void *info) { __atomic_add_fetch(&((struct gcallout *)info)->refs, 1, __ATOMIC_SEQ_CST); return info; }
+static void stream_release(void *info) { if (__atomic_sub_fetch(&((struct gcallout *)info)->refs, 1, __ATOMIC_SEQ_CST) <= 0) callout_release(info); }
 // CFStreamError (i386): {CFIndex domain; SInt32 error} = 8 bytes, returned in edx:eax.
 #define RET_STREAMERROR(e)                                                                         \
     do {                                                                                           \

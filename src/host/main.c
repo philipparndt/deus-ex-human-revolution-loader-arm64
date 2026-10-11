@@ -194,6 +194,21 @@ int main(int argc, char **argv) {
     strlcpy(exe_dir_buf, exe_path, sizeof exe_dir_buf);
     const char *exe_dir = dirname(exe_dir_buf);
 
+    // Feral's own launcher tells the game where its data lives (the folder
+    // containing the .app, e.g. DeusExHRDCData next to it).
+    if (!getenv("FERAL_RUNTIME_DATA_FOLDER")) {
+        char app_dir[PATH_MAX];
+        strlcpy(app_dir, exe_path, sizeof app_dir);
+        char *contents = strstr(app_dir, ".app/Contents/MacOS/");
+        if (contents) {
+            *strstr(app_dir, ".app/") = 0;
+            char *slash = strrchr(app_dir, '/');
+            if (slash) *slash = 0;
+            setenv("FERAL_RUNTIME_DATA_FOLDER", app_dir, 0);
+            LOGI("FERAL_RUNTIME_DATA_FOLDER=%s", app_dir);
+        }
+    }
+
     gmem_init(CPU_DIRECT_LOW, CPU_EXECUTES_GUEST_PAGES);
     cpu_init();
     hobj_init();
