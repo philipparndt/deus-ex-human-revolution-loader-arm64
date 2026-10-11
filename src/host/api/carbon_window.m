@@ -589,17 +589,34 @@ THUNK(MoveWindowStructure) {
     });
     RET(noErr);
 }
+// RepositionWindow(window, parentWindow, WindowPositionMethod)
 THUNK(RepositionWindow) {
     CBWindow *w = WIN(0), *parent = WIN(1);
+    uint32_t method = ARG(2);
     if (!w) RET(errInvalidWindowRef);
     cb_on_main(^{
-      if (parent) {
-          NSRect pf = [parent->ns frame], f = [w->ns frame];
-          [w->ns setFrameOrigin:NSMakePoint(NSMidX(pf) - f.size.width / 2, NSMidY(pf) - f.size.height / 2)];
+      NSRect f = [w->ns frame];
+      NSScreen *screen = [NSScreen mainScreen];
+      // kWindowCenterOnParentWindowScreen (3), kWindowCascadeOnParentWindowScreen (6),
+      // kWindowAlertPositionOnParentWindowScreen (9): the parent's screen
+      if (parent && (method == 3 || method == 6 || method == 9) && [parent->ns screen]) screen = [parent->ns screen];
+      NSRect area = [screen visibleFrame]; // below the menu bar, above the Dock
+      NSPoint o;
+      if (parent && parent != w && (method == 2 || method == 5 || method == 8)) {
+          NSRect pf = [parent->ns frame]; // on the parent window itself
+          o = NSMakePoint(NSMidX(pf) - f.size.width / 2, NSMidY(pf) - f.size.height / 2);
+      } else if (method == 7 || method == 8 || method == 9) {
+          // alert position: horizontally centered, upper third
+          o = NSMakePoint(NSMidX(area) - f.size.width / 2, NSMaxY(area) - (area.size.height - f.size.height) / 3 - f.size.height);
       } else {
-          [w->ns center];
+          o = NSMakePoint(NSMidX(area) - f.size.width / 2, NSMidY(area) - f.size.height / 2);
       }
+      // keep the title bar reachable
+      if (o.y + f.size.height > NSMaxY(area)) o.y = NSMaxY(area) - f.size.height;
+      if (o.x < NSMinX(area)) o.x = NSMinX(area);
+      [w->ns setFrameOrigin:o];
     });
+    LOGD("carbon: RepositionWindow(%#x, parent %#x, method %u)", ARG(0), ARG(1), method);
     RET(noErr);
 }
 
