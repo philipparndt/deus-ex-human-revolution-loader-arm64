@@ -911,6 +911,16 @@ static void tabs_rebuild(CBView *v) {
     if (v->value >= 1 && v->value <= (int32_t)v->tabs.count) [sc setSelectedSegment:v->value - 1];
 }
 
+// Carbon's tab count is the control maximum; titles may arrive (tabi) before it grows.
+static void tabs_resize(CBView *v, int32_t n) {
+    if (v->ctype != CT_TABS || n < 0 || n > 64) return;
+    while ((int32_t)v->tabs.count < n) [v->tabs addObject:@""];
+    while ((int32_t)v->tabs.count > n) [v->tabs removeLastObject];
+    cb_on_main(^{
+      tabs_rebuild(v);
+    });
+}
+
 // CreateEditUnicodeTextControl(window, rect, CFStringRef text, Boolean isPassword, const ControlFontStyleRec *, ControlRef *out)
 // (looked up at run time by the game through CFBundleGetFunctionPointerForName)
 THUNK(CreateEditUnicodeTextControl) {
@@ -1002,6 +1012,7 @@ THUNK(SetControl32BitMaximum) {
     CBView *v = VIEW(0);
     if (!v) return;
     v->maximum = (int32_t)ARG(1);
+    if (v->ctype == CT_TABS) tabs_resize(v, v->maximum);
     apply_value(v);
 }
 
@@ -1259,7 +1270,8 @@ THUNK(SetControlData) {
         apply_font_style(v, d);
         RET(noErr);
     case kControlTabInfoTag:
-        if (v->ctype == CT_TABS && part >= 1 && part <= (int16_t)v->tabs.count && size >= 8) {
+        if (v->ctype == CT_TABS && part >= 1 && part <= 64 && size >= 8) {
+            if (part > (int16_t)v->tabs.count) tabs_resize(v, part);
             // ControlTabInfoRecV1 {SInt16 version; SInt16 iconSuiteID; CFStringRef name}
             uint16_t ver = gread16(d);
             NSString *s = ver == kControlTabInfoVersionOne ? nsstr(gread32(d + 4))
