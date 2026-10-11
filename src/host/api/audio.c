@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include <math.h>
+#include <time.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <AudioUnit/AudioUnit.h>
 #include <CoreAudio/CoreAudio.h>
@@ -245,6 +246,9 @@ struct render_cb {
     gaddr_t data;           // guest audio data buffer
     uint32_t data_cap;
     uint32_t calls;
+    // real-time budget (logged with the level): guest render time per callback
+    uint64_t worst_ns;
+    uint32_t over_budget; // callbacks that took more than half the buffer duration
 };
 
 static OSStatus host_render(void *refcon, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts, UInt32 bus,
@@ -275,7 +279,11 @@ static OSStatus host_render(void *refcon, AudioUnitRenderActionFlags *flags, con
     gwrite32(cb->flags, flags ? *flags : 0);
     if (ts) memcpy(g2h(cb->ts), ts, sizeof *ts);
     uint32_t args[6] = {cb->refcon, cb->flags, cb->ts, bus, frames, cb->abl};
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     OSStatus st = (OSStatus)cpu_call(cb->proc, 6, args);
+    uint64_t dt = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
+    if (dt > cb->worst_ns) cb->worst_ns = dt;
+    if (dt > (uint64_t)frames * 1000000000ull / 48000 / 2) cb->over_budget++; // half of a 48 kHz buffer
     if (cb->calls++ == 0 || st)
         if (cb->calls < 4) LOGI("audio: render callback #%u: %u frames, %u buffers, status %d", cb->calls, frames, n, (int)st);
     if (flags) *flags = gread32(cb->flags);
@@ -298,7 +306,10 @@ static OSStatus host_render(void *refcon, AudioUnitRenderActionFlags *flags, con
             if (s[i] != s[i]) nans++;
             else if (fabsf(s[i]) > peak) peak = fabsf(s[i]);
         }
-        LOGI("audio: render #%u peak %.4f nan %u flags %#x", cb->calls, peak, nans, flags ? *flags : 0);
+        LOGI("audio: render #%u peak %.4f nan %u flags %#x, worst %.2f ms, %u over half budget", cb->calls, peak,
+             nans, flags ? *flags : 0, cb->worst_ns / 1e6, cb->over_budget);
+        cb->worst_ns = 0;
+        cb->over_budget = 0;
     }
     return st;
 }
