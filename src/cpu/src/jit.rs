@@ -507,7 +507,12 @@ fn decode_at(ip: u32) -> Instruction {
 /// True if the code at `eip` overwrites all arithmetic flags before reading
 /// any of them (looking at a few straight-line instructions).
 fn flags_dead_at(eip: u32) -> bool {
-    let mut pending: u32 = 0x3f;
+    flags_dead_from(eip, 0x3f)
+}
+
+/// Are all `pending` flags overwritten at `eip` before any of them is read
+/// (straight-line code only, at most 16 instructions)?
+fn flags_dead_from(eip: u32, mut pending: u32) -> bool {
     let mut ip = eip;
     for _ in 0..16 {
         let insn = decode_at(ip);
@@ -552,10 +557,18 @@ fn flags_live_after(insns: &[Instruction], i: usize) -> bool {
             return false;
         }
         if insn.flow_control() != FlowControl::Next {
-            return true;
+            // Direct jump or call: look at the target (the callee or jump target
+            // usually sets the flags before reading any). Anything else: live.
+            let direct = matches!(insn.flow_control(), FlowControl::UnconditionalBranch | FlowControl::Call)
+                && insn.op0_kind() == OpKind::NearBranch32;
+            return !(direct && flags_dead_from(insn.near_branch32(), pending));
         }
     }
-    true
+    // The block was cut (size limit, stub boundary): continue at the next instruction.
+    match insns.last() {
+        Some(last) => !flags_dead_from(last.next_ip32(), pending),
+        None => true,
+    }
 }
 
 // --- per-block translator ----------------------------------------------------------------------------
