@@ -20,3 +20,4 @@ void dxcpu_x87_push(dxcpu_state *s, double v);
 double dxcpu_x87_pop(dxcpu_state *s);
 uint64_t dxcpu_icount(const dxcpu_state *s);
 uint32_t dxcpu_disasm(uint32_t addr, char *buf, uint32_t len);
+void dxcpu_print_stats(void);

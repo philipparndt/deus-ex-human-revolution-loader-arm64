@@ -42,6 +42,10 @@ _Noreturn void runtime_exit(int code) {
         else gcall0(e.fn);
     }
     stdio_flush_all();
+#if defined(CPU_BACKEND_DXCPU)
+    extern void dxcpu_print_stats(void);
+    dxcpu_print_stats();
+#endif
     LOGI("guest exited with code %d", code);
     exit(code);
 }

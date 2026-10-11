@@ -19,6 +19,9 @@ pub enum Engine {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dxcpu_engine_new(stub_lo: u32, stub_hi: u32) -> *mut Engine {
+    if std::env::var_os("DXCPU_STATS").is_some() {
+        crate::jit::STATS_ON.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let e = if std::env::var_os("DXCPU_INTERP").is_some() {
         Engine::Interp(InterpEngine::new(stub_lo, stub_hi))
     } else {
@@ -123,4 +126,25 @@ pub extern "C" fn dxcpu_x87_pop(st: *mut CpuState) -> f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn dxcpu_icount(st: *const CpuState) -> u64 {
     unsafe { (*st).icount }
+}
+
+/// Print JIT statistics (DXCPU_STATS=1): interpreter fallbacks per mnemonic.
+#[unsafe(no_mangle)]
+pub extern "C" fn dxcpu_print_stats() {
+    use std::sync::atomic::Ordering;
+    if !crate::jit::STATS_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut v: Vec<(u64, usize)> = crate::jit::FALLBACK_COUNT
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.load(Ordering::Relaxed), i))
+        .filter(|(c, _)| *c > 0)
+        .collect();
+    v.sort_by(|a, b| b.cmp(a));
+    eprintln!("dxcpu: {} dispatcher entries", crate::jit::DISPATCH_COUNT.load(Ordering::Relaxed));
+    for (c, i) in v.iter().take(25) {
+        let m: iced_x86::Mnemonic = unsafe { std::mem::transmute(*i as u16) };
+        eprintln!("  fallback {:>12} x {:?}", c, m);
+    }
 }

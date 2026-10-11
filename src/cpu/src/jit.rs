@@ -127,9 +127,16 @@ extern "C" fn helper_cond(ctx: *mut JitCtx, cc: u32) -> u32 {
 
 /// Execute one instruction with the interpreter. Returns 0 to continue the
 /// block, 1 if control left the block (ctx.eip set), 2 on a fault.
+pub static STATS_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static FALLBACK_COUNT: [std::sync::atomic::AtomicU64; 2048] = [const { std::sync::atomic::AtomicU64::new(0) }; 2048];
+pub static DISPATCH_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 extern "C" fn helper_interp(ctx: *mut JitCtx, insn: *const Instruction) -> u32 {
     let ctx = unsafe { &mut *ctx };
     let insn = unsafe { &*insn };
+    if STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        FALLBACK_COUNT[(insn.mnemonic() as usize) & 2047].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     ctx.materialize();
     let st = unsafe { &mut *ctx.state };
     st.gpr = ctx.gpr;
@@ -261,8 +268,7 @@ impl Jit {
                 break;
             }
             if i + 1 == insns.len() {
-                t.flush_flags();
-                t.exit_direct(insn.next_ip32());
+                t.exit_direct_flags(insn.next_ip32());
             }
         }
         let code = std::mem::take(&mut t.a.code);
@@ -315,6 +321,32 @@ fn decode_at(ip: u32) -> Instruction {
         }
         len = 16;
     }
+}
+
+/// True if the code at `eip` overwrites all arithmetic flags before reading
+/// any of them (looking at a few straight-line instructions).
+fn flags_dead_at(eip: u32) -> bool {
+    let mut pending: u32 = 0x3f;
+    let mut ip = eip;
+    for _ in 0..16 {
+        let insn = decode_at(ip);
+        if insn.is_invalid() || insn.rflags_read() & pending != 0 {
+            return false;
+        }
+        let mut written = insn.rflags_written() | insn.rflags_cleared() | insn.rflags_set() | insn.rflags_undefined();
+        if is_shift(insn.mnemonic()) {
+            written = 0;
+        }
+        pending &= !written;
+        if pending == 0 {
+            return true;
+        }
+        if insn.flow_control() != FlowControl::Next {
+            return false;
+        }
+        ip = insn.next_ip32();
+    }
+    false
 }
 
 /// Are the arithmetic flags produced by insns[i] possibly read later?
@@ -398,6 +430,18 @@ impl Translator {
             self.a.stp_w(FR, FC, CTX, OFF_FRES);
             self.dirty = false;
         }
+    }
+
+    /// Exit to a known guest eip, storing the lazy flags only if the target
+    /// may read them.
+    fn exit_direct_flags(&mut self, target: u32) {
+        let saved = (self.nzcv, self.dirty);
+        if !flags_dead_at(target) {
+            self.flush_flags();
+        }
+        self.exit_direct(target);
+        self.nzcv = saved.0;
+        self.dirty = saved.1;
     }
 
     /// Exit to a known guest eip: a patchable branch (initially to the next
@@ -683,6 +727,9 @@ impl Translator {
                 _ => return self.fallback(insn),
             }
         }
+        if self.fast_path(insn, m, size, flags_live) {
+            return true;
+        }
         match m {
             Nop => {}
             Mov => {
@@ -839,6 +886,13 @@ impl Translator {
                 self.store_reg0(insn, T0);
                 self.nzcv = None;
             }
+            Mul | Imul if !flags_live && insn.op_count() == 1 && size == 4 => {
+                self.load(insn, 0, T1);
+                if m == Mul { self.a.umull(T0, G[EAX], T1) } else { self.a.smull(T0, G[EAX], T1) }
+                self.a.mov_w(G[EAX], T0);
+                self.a.lsr_x_imm(G[EDX], T0, 32);
+                self.nzcv = None;
+            }
             Push if size == 4 => {
                 self.load(insn, 0, T0);
                 let esp = G[ESP];
@@ -881,16 +935,13 @@ impl Translator {
             Jo | Jno | Jb | Jae | Je | Jne | Jbe | Ja | Js | Jns | Jl | Jge | Jle | Jg => {
                 let c = self.cond(m);
                 let taken = self.a.bcond_fixup(c);
-                self.flush_flags_both();
-                self.exit_direct(insn.next_ip32());
+                self.exit_direct_flags(insn.next_ip32());
                 self.a.bind(taken);
-                self.flush_flags_both();
-                self.exit_direct(insn.near_branch32());
+                self.exit_direct_flags(insn.near_branch32());
                 return false;
             }
             Jmp if insn.op0_kind() == OpKind::NearBranch32 => {
-                self.flush_flags();
-                self.exit_direct(insn.near_branch32());
+                self.exit_direct_flags(insn.near_branch32());
                 return false;
             }
             Jmp => {
@@ -936,12 +987,107 @@ impl Translator {
         true
     }
 
-    /// Flag descriptor must be valid on both sides of a conditional branch.
-    fn flush_flags_both(&mut self) {
-        let saved = (self.nzcv, self.dirty);
-        self.flush_flags();
-        self.nzcv = saved.0;
-        self.dirty = saved.1;
+    /// 32-bit register forms operating directly on the host registers that
+    /// hold the guest registers. Returns false if not applicable.
+    fn fast_path(&mut self, insn: &Instruction, m: Mnemonic, size: u32, flags_live: bool) -> bool {
+        use Mnemonic::*;
+        if size != 4 || insn.op_count() < 1 || insn.op0_kind() != OpKind::Register {
+            return false;
+        }
+        let d = gr(insn.op0_register());
+        let src_reg = insn.op_count() > 1 && insn.op1_kind() == OpKind::Register && insn.op_register(1).size() == 4;
+        let src_imm = insn.op_count() > 1
+            && matches!(insn.op1_kind(), OpKind::Immediate32 | OpKind::Immediate8to32);
+        let imm = if src_imm { insn.immediate(1) as u32 } else { 0 };
+        match m {
+            Mov if src_reg => self.a.mov_w(d, gr(insn.op1_register())),
+            Mov if src_imm => self.a.mov_w_imm(d, imm),
+            Movzx if insn.op1_kind() == OpKind::Register && !is_high8(insn.op1_register()) => {
+                let s = gr(insn.op1_register());
+                if insn.op_register(1).size() == 1 { self.a.uxtb_w(d, s) } else { self.a.uxth_w(d, s) }
+            }
+            Add | Sub | Cmp | And | Or | Xor | Test if src_reg || src_imm => {
+                let b = if src_reg {
+                    gr(insn.op1_register())
+                } else if imm < 4096 && matches!(m, Add | Sub | Cmp) {
+                    u32::MAX // immediate form below
+                } else {
+                    self.a.mov_w_imm(T1, imm);
+                    T1
+                };
+                let kind = match m {
+                    Add => K_ADD,
+                    Sub | Cmp => K_SUB,
+                    _ => K_LOGIC,
+                };
+                // Keep the operands for the lazy flag descriptor before overwriting d.
+                if flags_live {
+                    self.a.mov_w(FA, d);
+                    if b == u32::MAX { self.a.mov_w_imm(FB, imm) } else { self.a.mov_w(FB, b) }
+                }
+                let dst = if matches!(m, Cmp | Test) { XZR } else { d };
+                match (m, b == u32::MAX) {
+                    (Add, true) => self.a.emit(0x3100_0000 | (imm << 10) | (d << 5) | dst), // adds w, w, #imm
+                    (Sub | Cmp, true) => self.a.subs_w_imm(dst, d, imm),
+                    (Add, false) => self.a.adds_w(dst, d, b),
+                    (Sub | Cmp, false) => self.a.subs_w(dst, d, b),
+                    (And | Test, _) => self.a.ands_w(dst, d, b),
+                    (Or, _) => {
+                        self.a.orr_w(d, d, b);
+                        self.a.tst_w(d, d);
+                    }
+                    _ => {
+                        self.a.eor_w(d, d, b);
+                        self.a.tst_w(d, d);
+                    }
+                }
+                if flags_live {
+                    if matches!(m, Cmp | Test) {
+                        // result needed for PF/ZF materialisation
+                        match m {
+                            Cmp => self.a.sub_w(FR, FA, FB),
+                            _ => self.a.and_w(FR, FA, FB),
+                        }
+                    } else {
+                        self.a.mov_w(FR, d);
+                    }
+                    self.dirty = true;
+                } else {
+                    self.dirty = false;
+                }
+                self.nzcv = Some(FlagSrc { kind, size: 4 });
+            }
+            Inc | Dec if insn.op_count() == 1 => {
+                if flags_live {
+                    self.carry_into_fc();
+                    self.a.mov_w(FA, d);
+                    self.a.mov_w_imm(FB, 1);
+                }
+                if m == Inc {
+                    self.a.emit(0x3100_0400 | (d << 5) | d); // adds wd, wd, #1
+                } else {
+                    self.a.emit(0x7100_0400 | (d << 5) | d); // subs wd, wd, #1
+                }
+                if flags_live {
+                    self.a.mov_w(FR, d);
+                    self.dirty = true;
+                } else {
+                    self.dirty = false;
+                }
+                self.nzcv = Some(FlagSrc { kind: if m == Inc { K_INC } else { K_DEC }, size: 4 });
+            }
+            Imul if !flags_live && insn.op_count() == 3 && insn.op1_kind() == OpKind::Register => {
+                self.a.mov_w_imm(T1, insn.immediate(2) as u32);
+                self.a.mul_w(d, gr(insn.op1_register()), T1);
+                self.nzcv = None;
+            }
+            Imul if !flags_live && insn.op_count() == 2 && src_reg => {
+                self.a.mul_w(d, d, gr(insn.op1_register()));
+                self.nzcv = None;
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Like load(), but reuse T4 when operand 0 already computed the address.
@@ -1006,6 +1152,9 @@ impl JitEngine {
             }
             if ctx.eip >= self.jit.stub_lo && ctx.eip < self.jit.stub_hi {
                 break Exit::Stub;
+            }
+            if STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
+                DISPATCH_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             let r = self.jit.run_once(&mut ctx);
             if r == EXIT_FAULT {
