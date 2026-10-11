@@ -11,6 +11,12 @@ pub extern "C" fn dxcpu_set_guest_base(base: *mut u8) {
     mem::set_base(base);
 }
 
+/// Host query "is [addr, addr+len) mapped guest memory" (speculative decoding).
+#[unsafe(no_mangle)]
+pub extern "C" fn dxcpu_set_mapped_query(f: extern "C" fn(u32, u32) -> bool) {
+    mem::set_mapped_query(f);
+}
+
 /// Execution engine: JIT by default, pure interpreter with DXCPU_INTERP=1.
 pub enum Engine {
     Jit(JitEngine),

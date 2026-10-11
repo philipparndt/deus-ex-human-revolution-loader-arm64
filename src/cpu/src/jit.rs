@@ -242,6 +242,20 @@ pub fn verify_on() -> bool {
     })
 }
 
+/// DXCPU_TSO=1: x86 store ordering for guest memory. ARM may reorder plain
+/// loads and stores; x86 only lets a later load pass an earlier store. Loads get
+/// dmb ishld after them, stores dmb ishst before them (ESP-based accesses
+/// excepted), the interpreter fences likewise (mem.rs). litmus.c shows the
+/// difference (message passing).
+pub fn tso_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var("DXCPU_TSO").map(|v| v != "0").unwrap_or(false);
+        mem::TSO.store(on, std::sync::atomic::Ordering::Relaxed);
+        on
+    })
+}
+
 // DXCPU_JIT_OFF=m:Add+Sub+Shl interprets just those mnemonics.
 fn jit_off_mnemonic(m: Mnemonic) -> bool {
     static SET: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
@@ -525,6 +539,10 @@ fn flags_dead_at(eip: u32) -> bool {
 fn flags_dead_from(eip: u32, mut pending: u32) -> bool {
     let mut ip = eip;
     for _ in 0..16 {
+        // Speculative: the target may be unmapped (unused import, data); treat as live.
+        if !mem::readable(ip, 16) {
+            return false;
+        }
         let insn = decode_at(ip);
         if insn.is_invalid() || insn.rflags_read() & pending != 0 {
             return false;
@@ -627,6 +645,10 @@ struct Seg {
 }
 
 struct Translator {
+    /// x86 TSO memory ordering (DXCPU_TSO): barriers around guest memory accesses.
+    tso: bool,
+    /// The last effective address computed by ea() is ESP-based (thread-local stack).
+    ea_stack: bool,
     a: Asm,
     start: usize,
     exit_addr: usize,
@@ -672,6 +694,8 @@ fn is_high8(r: Register) -> bool {
 impl Translator {
     fn new(start: usize, exit_addr: usize, fp_ok: bool) -> Self {
         Translator {
+            tso: tso_on(),
+            ea_stack: false,
             a: Asm::new(),
             start,
             exit_addr,
@@ -915,6 +939,17 @@ impl Translator {
         }
     }
 
+    fn tso_after_load(&mut self) {
+        if self.tso && !self.ea_stack {
+            self.a.dmb_ishld();
+        }
+    }
+    fn tso_before_store(&mut self) {
+        if self.tso && !self.ea_stack {
+            self.a.dmb_ishst();
+        }
+    }
+
     // --- x87 ------------------------------------------------------------------------------------
     //
     // The common x87 data movement natively, with exactly the interpreter's
@@ -1059,6 +1094,7 @@ impl Translator {
         match m {
             Fld if mem && msize == MemorySize::Float32 => {
                 self.a.ldr_uxtw(2, T0, BASE, T4);
+                self.tso_after_load();
                 // SNaN (quiet bit clear) sets IE; fcvt quiets and keeps sign and payload.
                 self.a.lsl_w_imm(T2, T0, 1);
                 self.a.mov_w_imm(T3, 0xff00_0000);
@@ -1075,6 +1111,7 @@ impl Translator {
             }
             Fld if mem => {
                 self.a.ldr_uxtw(3, T0, BASE, T4);
+                self.tso_after_load();
                 self.a.fmov_d_x(V0, T0);
                 self.x87_quiet_f64(V0);
                 self.x87_push(V0);
@@ -1092,14 +1129,17 @@ impl Translator {
                 match msize {
                     MemorySize::Int16 => {
                         self.a.ldrs_w_uxtw(1, T0, BASE, T4);
+                        self.tso_after_load();
                         self.a.scvtf_s_w(true, V0, T0);
                     }
                     MemorySize::Int32 => {
                         self.a.ldr_uxtw(2, T0, BASE, T4);
+                        self.tso_after_load();
                         self.a.scvtf_s_w(true, V0, T0);
                     }
                     _ => {
                         self.a.ldr_uxtw(3, T0, BASE, T4);
+                        self.tso_after_load();
                         self.a.scvtf_d_x(V0, T0);
                     }
                 }
@@ -1121,6 +1161,7 @@ impl Translator {
                 self.a.bind(quiet);
                 self.a.bind(not_nan);
                 self.a.fcvt_s_d(V1, V0);
+                self.tso_before_store();
                 self.a.str_v_uxtw(2, V1, BASE, T4);
                 if m == Fstp {
                     self.x87_pop();
@@ -1130,6 +1171,7 @@ impl Translator {
                 self.x87_get(V0, 0);
                 self.a.fmov_x_d(T0, V0);
                 self.x87_quiet_f64(V0);
+                self.tso_before_store();
                 self.a.str_v_uxtw(3, V0, BASE, T4);
                 if m == Fstp {
                     self.x87_pop();
@@ -1176,8 +1218,10 @@ impl Translator {
                     self.a.sxth_w(T3, T0);
                     self.a.cmp_w(T3, T0);
                     cold.push(self.a.bcond_fixup(Cond::Ne));
+                    self.tso_before_store();
                     self.a.str_uxtw(1, T0, BASE, T4);
                 } else {
+                    self.tso_before_store();
                     self.a.str_uxtw(2, T0, BASE, T4);
                 }
                 if m != Fist {
@@ -1414,6 +1458,9 @@ impl Translator {
     /// Compute the effective address of the memory operand into T4.
     fn ea(&mut self, insn: &Instruction) {
         let base = insn.memory_base();
+        // Only ESP-based accesses are assumed thread-local (EBP may be a
+        // general register with -fomit-frame-pointer).
+        self.ea_stack = base == Register::ESP;
         let index = insn.memory_index();
         let disp = insn.memory_displacement32();
         let mut have = false;
@@ -1478,6 +1525,7 @@ impl Translator {
                 self.ea(insn);
                 let sz = insn.memory_size().size();
                 self.a.ldr_uxtw(log2(sz), rd, BASE, T4);
+                self.tso_after_load();
             }
             _ => self.a.mov_w_imm(rd, insn.immediate(i) as u32 & size_mask(interp::op_size(insn, i))),
         }
@@ -1507,6 +1555,7 @@ impl Translator {
                     self.ea(insn);
                 }
                 let sz = insn.memory_size().size();
+                self.tso_before_store();
                 self.a.str_uxtw(log2(sz), rs, BASE, T4);
             }
             _ => unreachable!(),
@@ -2403,6 +2452,7 @@ impl Translator {
         };
         self.ea(insn);
         self.a.ldr_v_uxtw(sz, tmp, BASE, T4);
+        self.tso_after_load();
         tmp
     }
 
@@ -2476,10 +2526,12 @@ impl Translator {
                         self.ea(insn);
                         let vd = self.xdef(d);
                         self.a.ldr_v_uxtw(4, vd, BASE, T4);
+                        self.tso_after_load();
                     }
                 } else {
                     let vs = self.xget(xi(1));
                     self.ea(insn);
+                    self.tso_before_store();
                     self.a.str_v_uxtw(4, vs, BASE, T4);
                 }
             }
@@ -2493,9 +2545,11 @@ impl Translator {
                     self.ea(insn);
                     let vd = self.xdef(xi(0));
                     self.a.ldr_v_uxtw(sz, vd, BASE, T4);
+                    self.tso_after_load();
                 } else {
                     let vs = self.xget(xi(1));
                     self.ea(insn);
+                    self.tso_before_store();
                     self.a.str_v_uxtw(sz, vs, BASE, T4);
                 }
             }
@@ -2509,6 +2563,7 @@ impl Translator {
                         self.ea(insn);
                         let vd = self.xdef(xi(0));
                         self.a.ldr_v_uxtw(2, vd, BASE, T4);
+                        self.tso_after_load();
                     }
                 } else {
                     let vs = self.xget(xi(1));
@@ -2516,6 +2571,7 @@ impl Translator {
                         self.a.fmov_w_s(gr(insn.op0_register()), vs);
                     } else {
                         self.ea(insn);
+                        self.tso_before_store();
                         self.a.str_v_uxtw(2, vs, BASE, T4);
                     }
                 }
@@ -2529,9 +2585,11 @@ impl Translator {
                     self.ea(insn);
                     let vd = self.xdef(xi(0));
                     self.a.ldr_v_uxtw(3, vd, BASE, T4);
+                    self.tso_after_load();
                 } else {
                     let vs = self.xget(xi(1));
                     self.ea(insn);
+                    self.tso_before_store();
                     self.a.str_v_uxtw(3, vs, BASE, T4);
                 }
             }
@@ -2540,6 +2598,7 @@ impl Translator {
                 if reg(0) {
                     self.ea(insn);
                     self.a.ldr_v_uxtw(3, V0, BASE, T4);
+                    self.tso_after_load();
                     let vd = self.xmod(xi(0));
                     self.a.ins_elem(3, vd, hi, V0, 0);
                 } else {
@@ -2547,8 +2606,10 @@ impl Translator {
                     self.ea(insn);
                     if hi == 1 {
                         self.a.ins_elem(3, V0, 0, vs, 1);
+                        self.tso_before_store();
                         self.a.str_v_uxtw(3, V0, BASE, T4);
                     } else {
+                        self.tso_before_store();
                         self.a.str_v_uxtw(3, vs, BASE, T4);
                     }
                 }
@@ -2593,6 +2654,7 @@ impl Translator {
                 self.ensure_xbase();
                 self.a.ldr_imm(2, T0, XB, MXCSR_OFF - XMM_OFF);
                 self.ea(insn);
+                self.tso_before_store();
                 self.a.str_uxtw(2, T0, BASE, T4);
             }
 
@@ -2722,6 +2784,7 @@ impl Translator {
                 } else {
                     self.ea(insn);
                     self.a.ldr_uxtw(2, T0, BASE, T4);
+                    self.tso_after_load();
                     T0
                 };
                 self.a.scvtf_s_w(dbl, V0, w);
@@ -3105,10 +3168,12 @@ impl Translator {
             let sz = insn.memory_size().size();
             if insn.op0_kind() == OpKind::Memory {
                 self.a.ldr_uxtw(log2(sz), rd, BASE, T4);
+                self.tso_after_load();
                 return;
             }
             self.ea(insn);
             self.a.ldr_uxtw(log2(sz), rd, BASE, T4);
+            self.tso_after_load();
             return;
         }
         // The address in T4 (operand 0) must survive: load() only touches T4 for memory.

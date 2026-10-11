@@ -142,6 +142,7 @@ void cpu_init(void) {
     }
     if (!guest_base) fatal("dxcpu backend requires a guest base");
     dxcpu_set_guest_base(guest_base);
+    dxcpu_set_mapped_query(gmem_is_mapped);
     if (!gmem_map_fixed(STUB_BASE, MAX_STUBS * STUB_SIZE + MAX_DEPTH * STUB_SIZE, GPROT_RW))
         fatal("dxcpu: cannot reserve stub range");
     memset(g2h(STUB_BASE), 0xF4, MAX_STUBS * STUB_SIZE + MAX_DEPTH * STUB_SIZE);

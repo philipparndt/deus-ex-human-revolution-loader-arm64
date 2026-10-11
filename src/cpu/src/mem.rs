@@ -7,6 +7,21 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU16, AtomicU32, A
 // Write log for the JIT verifier (DXCPU_VERIFY): while a thread records, every
 // write through this module saves the old bytes first so they can be restored.
 pub static UNDO_ON: AtomicBool = AtomicBool::new(false);
+/// x86 TSO ordering for interpreted accesses (see jit::tso_on).
+pub static TSO: AtomicBool = AtomicBool::new(false);
+
+#[inline(always)]
+fn tso_load() {
+    if TSO.load(Ordering::Relaxed) {
+        std::sync::atomic::fence(Ordering::Acquire);
+    }
+}
+#[inline(always)]
+fn tso_store() {
+    if TSO.load(Ordering::Relaxed) {
+        std::sync::atomic::fence(Ordering::Release);
+    }
+}
 thread_local! {
     static RECORDING: Cell<bool> = const { Cell::new(false) };
     static UNDO: RefCell<Vec<(u32, u8)>> = const { RefCell::new(Vec::new()) };
@@ -59,6 +74,22 @@ pub fn undo_rollback() -> Vec<(u32, u8)> {
 
 static BASE: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
 
+static MAPPED_QUERY: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+pub fn set_mapped_query(f: extern "C" fn(u32, u32) -> bool) {
+    MAPPED_QUERY.store(f as *mut (), Ordering::Relaxed);
+}
+
+/// May [a, a+len) be read without faulting? Without a host query: unknown, false.
+pub fn readable(a: u32, len: u32) -> bool {
+    let f = MAPPED_QUERY.load(Ordering::Relaxed);
+    if f.is_null() {
+        return false;
+    }
+    let f: extern "C" fn(u32, u32) -> bool = unsafe { std::mem::transmute(f) };
+    f(a, len)
+}
+
 pub fn set_base(p: *mut u8) {
     BASE.store(p, Ordering::Relaxed);
 }
@@ -75,47 +106,62 @@ pub fn ptr(addr: u32) -> *mut u8 {
 
 #[inline(always)]
 pub fn r8(a: u32) -> u8 {
-    unsafe { ptr(a).read() }
+    let v = unsafe { ptr(a).read() };
+    tso_load();
+    v
 }
 #[inline(always)]
 pub fn r16(a: u32) -> u16 {
-    unsafe { (ptr(a) as *const u16).read_unaligned() }
+    let v = unsafe { (ptr(a) as *const u16).read_unaligned() };
+    tso_load();
+    v
 }
 #[inline(always)]
 pub fn r32(a: u32) -> u32 {
-    unsafe { (ptr(a) as *const u32).read_unaligned() }
+    let v = unsafe { (ptr(a) as *const u32).read_unaligned() };
+    tso_load();
+    v
 }
 #[inline(always)]
 pub fn r64(a: u32) -> u64 {
-    unsafe { (ptr(a) as *const u64).read_unaligned() }
+    let v = unsafe { (ptr(a) as *const u64).read_unaligned() };
+    tso_load();
+    v
 }
 #[inline(always)]
 pub fn r128(a: u32) -> [u8; 16] {
-    unsafe { (ptr(a) as *const [u8; 16]).read_unaligned() }
+    let v = unsafe { (ptr(a) as *const [u8; 16]).read_unaligned() };
+    tso_load();
+    v
 }
 #[inline(always)]
 pub fn w8(a: u32, v: u8) {
     log(a, 1);
+    tso_store();
     unsafe { ptr(a).write(v) }
 }
 #[inline(always)]
 pub fn w16(a: u32, v: u16) {
     log(a, 2);
+    tso_store();
     unsafe { (ptr(a) as *mut u16).write_unaligned(v) }
 }
 #[inline(always)]
 pub fn w32(a: u32, v: u32) {
     log(a, 4);
+    tso_store();
     unsafe { (ptr(a) as *mut u32).write_unaligned(v) }
 }
 #[inline(always)]
 pub fn w64(a: u32, v: u64) {
     log(a, 8);
+    tso_store();
     unsafe { (ptr(a) as *mut u64).write_unaligned(v) }
 }
 #[inline(always)]
 pub fn w128(a: u32, v: [u8; 16]) {
     log(a, 16);
+    tso_store();
     unsafe { (ptr(a) as *mut [u8; 16]).write_unaligned(v) }
 }
 

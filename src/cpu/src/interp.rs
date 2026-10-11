@@ -653,6 +653,10 @@ fn bulk_string_op(st: &mut CpuState, m: Mnemonic, size: u32) -> bool {
     if n == 0 || dst + n > 1 << 32 || (is_movs && src + n > 1 << 32) {
         return false;
     }
+    let tso = mem::TSO.load(Ordering::Relaxed);
+    if tso {
+        std::sync::atomic::fence(Ordering::SeqCst); // x86 string ops are ordered like their elements
+    }
     unsafe {
         let d = mem::ptr(st.gpr[EDI]);
         if is_movs {
@@ -678,6 +682,9 @@ fn bulk_string_op(st: &mut CpuState, m: Mnemonic, size: u32) -> bool {
                 }
             }
         }
+    }
+    if tso {
+        std::sync::atomic::fence(Ordering::SeqCst);
     }
     st.gpr[EDI] = (dst + n) as u32;
     st.gpr[ECX] = 0;

@@ -522,6 +522,14 @@ impl Asm {
     pub fn fmov_x_d(&mut self, d: u32, n: u32) {
         self.emit(0x9e66_0000 | (n << 5) | d);
     }
+    /// dmb ishld: earlier loads before later loads and stores
+    pub fn dmb_ishld(&mut self) {
+        self.emit(0xd503_39bf);
+    }
+    /// dmb ishst: earlier stores before later stores
+    pub fn dmb_ishst(&mut self) {
+        self.emit(0xd503_3abf);
+    }
     /// fmov dd, xn
     pub fn fmov_d_x(&mut self, d: u32, n: u32) {
         self.emit(0x9e67_0000 | (n << 5) | d);
