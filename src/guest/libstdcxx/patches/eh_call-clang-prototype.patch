@@ -1,0 +1,16 @@
+clang rejects the definition of __cxa_call_terminate because unwind-cxx.h
+declares it as taking void* (GCC 4.2 silently accepted the mismatch).
+Same symbol (extern "C"), same calling convention, same behaviour.
+--- a/eh_call.cc
++++ b/eh_call.cc
+@@ -41,8 +41,9 @@
+ // terminate.
+ 
+ extern "C" void
+-__cxa_call_terminate(_Unwind_Exception* ue_header)
++__cxa_call_terminate(void* ue_header_arg)
+ {
++  _Unwind_Exception* ue_header = static_cast<_Unwind_Exception*>(ue_header_arg);
+ 
+   if (ue_header)
+     {

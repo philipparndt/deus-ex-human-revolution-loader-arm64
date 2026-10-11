@@ -60,3 +60,7 @@ const struct image_section *macho_section(const struct image *img, const char *s
 // Find which image/offset an address belongs to (for diagnostics).
 const char *macho_describe_addr(gaddr_t addr, char *buf, size_t len);
 void macho_register(struct image *img);
+
+// Link i386 relocatable objects and/or static archives into one image.
+// Undefined symbols are resolved with `resolve` (other images, host thunks).
+struct image *macho_load_objects(const char *name, const char *const *paths, int npaths, symbol_resolver resolve);

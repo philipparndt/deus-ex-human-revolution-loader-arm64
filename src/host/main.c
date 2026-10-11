@@ -3,6 +3,7 @@
 //   dxhost "/path/to/Deus Ex Human Revolution - Directors Cut.app" [args...]
 #include "cpu.h"
 #include "gmem.h"
+#include "hobj.h"
 #include "log.h"
 #include "macho.h"
 #include "runtime.h"
@@ -135,12 +136,39 @@ static void run_initializers(struct image *img) {
     }
 }
 
+// Test mode: link i386 objects/archives and call their main().
+static int run_test_objects(int n, char **paths) {
+    gmem_init(CPU_DIRECT_LOW, CPU_EXECUTES_GUEST_PAGES);
+    cpu_init();
+    hobj_init();
+    thunks_init();
+    struct image *img = macho_load_objects("test", (const char *const *)paths, n, resolve_symbol);
+    if (!img) fatal("no objects loaded");
+    loaded[nloaded++] = img;
+    macho_register(img);
+    runtime_preload_guest_libs(loaded, &nloaded);
+    runtime_images_loaded(loaded, nloaded);
+    gaddr_t stack_lo = gmem_map_anywhere(MAIN_STACK_SIZE, GPROT_RW, 0);
+    char *targv[] = {paths[0], NULL};
+    gaddr_t sp = build_stack(stack_lo + MAIN_STACK_SIZE, 1, targv, paths[0]);
+    runtime_set_main_stack(stack_lo, sp);
+    cpu_set_thread_stack(stack_lo, sp);
+    for (int i = nloaded - 1; i >= 0; i--) run_initializers(loaded[i]);
+    gaddr_t main_fn = macho_export(img, "_main", NULL);
+    if (!main_fn) fatal("test objects define no _main");
+    uint32_t args[3] = {runtime_argc(), runtime_argv(), runtime_envp()};
+    int rc = (int)cpu_call(main_fn, 3, args);
+    runtime_exit(rc);
+}
+
 int main(int argc, char **argv) {
     log_init();
     if (argc < 2) {
         fprintf(stderr, "usage: %s <Game.app | i386 executable> [args...]\n", argv[0]);
         return 1;
     }
+    if (strcmp(argv[1], "--test") == 0) return run_test_objects(argc - 2, argv + 2);
+
     char *exe_path = find_executable(argv[1]);
     if (!exe_path) fatal("cannot resolve executable for %s", argv[1]);
     char exe_dir_buf[PATH_MAX];
@@ -149,6 +177,7 @@ int main(int argc, char **argv) {
 
     gmem_init(CPU_DIRECT_LOW, CPU_EXECUTES_GUEST_PAGES);
     cpu_init();
+    hobj_init();
     thunks_init();
 
     struct image *exe = macho_load(exe_path);

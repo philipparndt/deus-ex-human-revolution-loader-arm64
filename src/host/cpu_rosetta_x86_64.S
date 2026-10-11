@@ -57,6 +57,9 @@ _rosetta_host_entry:
     mov %rsp, %rdi
     cld
     call _host_dispatch
+    // Thunks may rewrite callee-saved registers and esp (setjmp/longjmp).
+    mov R_EBX(%rsp), %ebx
+    mov R_EBP(%rsp), %ebp
     mov R_ESI(%rsp), %esi
     mov R_EDI(%rsp), %edi
     cmpl $0, R_FPRET(%rsp)

@@ -17,3 +17,6 @@ void runtime_preload_guest_libs(struct image **list, int *count);
 void runtime_images_loaded(struct image **list, int count);
 int runtime_image_count(void);
 struct image *runtime_image(int i);
+
+// Run guest atexit handlers, flush guest stdio and exit the process.
+_Noreturn void runtime_exit(int code);
