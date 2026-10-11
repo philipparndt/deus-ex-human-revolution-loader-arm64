@@ -242,6 +242,44 @@ pub fn verify_on() -> bool {
     })
 }
 
+// Translated-code tracking for invalidation: one bit per 4 KB guest page that
+// some block was translated from. The host reports code changes (mprotect to
+// executable, munmap, mmap MAP_FIXED); if they touch such a page, CODE_GEN
+// moves on and every engine drops its translations at its next dispatch.
+pub static CODE_GEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static CODE_PAGES: [std::sync::atomic::AtomicU64; 16384] = [const { std::sync::atomic::AtomicU64::new(0) }; 16384];
+
+pub fn mark_code(lo: u32, hi: u32) {
+    use std::sync::atomic::Ordering;
+    let (a, b) = (lo >> 12, hi.max(lo + 1).wrapping_sub(1) >> 12);
+    for p in a..=b.max(a) {
+        CODE_PAGES[(p >> 6) as usize].fetch_or(1 << (p & 63), Ordering::Relaxed);
+    }
+}
+
+/// Code at [addr, addr+len) may have changed: returns true (and invalidates all
+/// translations) if any of it had been translated.
+pub fn code_changed(addr: u32, len: u32) -> bool {
+    use std::sync::atomic::Ordering;
+    if len == 0 {
+        return false;
+    }
+    let end = (addr as u64 + len as u64 - 1).min(0xffff_ffff) as u32;
+    let mut hit = false;
+    for p in (addr >> 12)..=(end >> 12) {
+        let w = &CODE_PAGES[(p >> 6) as usize];
+        let bit = 1u64 << (p & 63);
+        if w.load(Ordering::Relaxed) & bit != 0 {
+            w.fetch_and(!bit, Ordering::Relaxed);
+            hit = true;
+        }
+    }
+    if hit {
+        CODE_GEN.fetch_add(1, Ordering::Release);
+    }
+    hit
+}
+
 /// DXCPU_TSO=1: x86 store ordering for guest memory. ARM may reorder plain
 /// loads and stores; x86 only lets a later load pass an earlier store. Loads get
 /// dmb ishld after them, stores dmb ishst before them (ESP-based accesses
@@ -428,6 +466,9 @@ impl Jit {
             *self = Jit::with_mode(lo, hi, fp);
         }
         let insns = self.decode(eip);
+        if let Some(last) = insns.last() {
+            mark_code(eip, last.next_ip32());
+        }
         let start = self.buf.next_addr();
         let mut t = Translator::new(start, self.exit_addr, self.fp_ok);
         let self_loop = insns.last().is_some_and(|l| {
@@ -3239,6 +3280,8 @@ pub struct JitEngine {
     /// SSE float ops go through the interpreter, data movement/integer SIMD stay native.
     pub jit_nd: Option<Box<Jit>>,
     pub interp: Box<Engine>,
+    /// CODE_GEN this engine's translations belong to.
+    code_gen: u32,
 }
 
 /// MXCSR control bits (exception flags ignored) for which native SSE float code is exact.
@@ -3354,7 +3397,12 @@ impl JitEngine {
     }
 
     pub fn new(stub_lo: u32, stub_hi: u32) -> Self {
-        JitEngine { jit: Jit::new(stub_lo, stub_hi), jit_nd: None, interp: Box::new(Engine::new(stub_lo, stub_hi)) }
+        JitEngine {
+            jit: Jit::new(stub_lo, stub_hi),
+            jit_nd: None,
+            interp: Box::new(Engine::new(stub_lo, stub_hi)),
+            code_gen: CODE_GEN.load(std::sync::atomic::Ordering::Acquire),
+        }
     }
 
     pub fn run(&mut self, st: &mut CpuState, stop: u32) -> Exit {
@@ -3371,6 +3419,16 @@ impl JitEngine {
             }
             if STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
                 DISPATCH_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            // Guest code changed somewhere we translated: start over (no block of
+            // this engine is executing while its dispatcher runs).
+            let g = CODE_GEN.load(std::sync::atomic::Ordering::Acquire);
+            if g != self.code_gen {
+                let (lo, hi) = (self.jit.stub_lo, self.jit.stub_hi);
+                self.jit = Jit::new(lo, hi);
+                self.jit_nd = None;
+                self.interp.flush();
+                self.code_gen = g;
             }
             // MXCSR only changes through interpreted instructions that end their block
             // (ldmxcsr, fxrstor) or host code between runs, so checking here suffices.

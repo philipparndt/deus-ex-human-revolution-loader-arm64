@@ -10,6 +10,7 @@
 //                                                     sigevent@24 (20 bytes) lio_opcode@44
 //   struct flock, fstore_t, struct log2phys and struct pollfd are layout-identical.
 #include "common.h"
+#include "cpu.h"
 #include "libc.h"
 
 #include <aio.h>
@@ -554,6 +555,7 @@ THUNK(mmap) {
         RET(MAP_FAILED_G);
         return;
     }
+    if (fixed) cpu_code_changed(addr, len); // replaces whatever was mapped there
     if (!anon) {
         struct stat st;
         if (fstat(fd, &st)) {
@@ -678,6 +680,7 @@ THUNK(munmap) {
         return;
     }
     uint64_t b = (uint64_t)a + round_up(len, GPAGE_GUEST);
+    cpu_code_changed(a, (uint32_t)(b - a)); // the range may be reused for other code
     pthread_mutex_lock(&maps_lock);
     if (!do_munmap(a, b)) {
         // Not created by mmap: release only whole pages inside the range.
@@ -716,6 +719,7 @@ THUNK(mprotect) {
     }
     int prot = ARGI(2) & 7;
     uint64_t end = (uint64_t)ARG(0) + ARG(1);
+    if (prot & GPROT_EXEC) cpu_code_changed(ARG(0), ARG(1)); // code written, now made executable
     uint64_t fs = round_up(ARG(0), GPAGE_SIZE), fe = end & ~(uint64_t)(GPAGE_SIZE - 1);
     if (fe > fs) gmem_protect((gaddr_t)fs, (uint32_t)(fe - fs), prot);
     // Partially covered pages are shared: only widen their access.

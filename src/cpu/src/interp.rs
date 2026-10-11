@@ -15,6 +15,7 @@ pub struct Block {
 /// Per-thread engine: decoded block cache plus configuration.
 pub struct Engine {
     blocks: HashMap<u32, Rc<Block>>,
+    code_gen: u32, // jit::CODE_GEN of the cached blocks
     pub stub_lo: u32,
     pub stub_hi: u32,
     pub tsc: u64,
@@ -32,7 +33,7 @@ const MAX_BLOCK: usize = 64;
 
 impl Engine {
     pub fn new(stub_lo: u32, stub_hi: u32) -> Self {
-        Engine { blocks: HashMap::new(), stub_lo, stub_hi, tsc: 0 }
+        Engine { blocks: HashMap::new(), code_gen: crate::jit::CODE_GEN.load(std::sync::atomic::Ordering::Acquire), stub_lo, stub_hi, tsc: 0 }
     }
 
     pub fn flush(&mut self) {
@@ -63,6 +64,9 @@ impl Engine {
                 break;
             }
         }
+        if let Some(last) = insns.last() {
+            crate::jit::mark_code(eip, last.next_ip32());
+        }
         Block { insns }
     }
 
@@ -86,6 +90,11 @@ impl Engine {
             }
             if eip >= self.stub_lo && eip < self.stub_hi {
                 return Exit::Stub;
+            }
+            let g = crate::jit::CODE_GEN.load(std::sync::atomic::Ordering::Acquire);
+            if g != self.code_gen {
+                self.blocks.clear();
+                self.code_gen = g;
             }
             let b = self.block(eip);
             for insn in b.insns.iter() {

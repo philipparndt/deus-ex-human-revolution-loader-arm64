@@ -71,3 +71,7 @@ static inline uint32_t gcall3(gaddr_t fn, uint32_t a, uint32_t b, uint32_t c) {
 
 // Watchdog (DXH_WATCHDOG, native backend): the main thread is alive.
 void cpu_main_heartbeat(void);
+
+// Guest code in [addr, addr+len) may have changed: drop translations of it
+// (native backend; Rosetta and Unicorn track code writes themselves).
+void cpu_code_changed(gaddr_t addr, uint32_t len);

@@ -11,6 +11,13 @@ pub extern "C" fn dxcpu_set_guest_base(base: *mut u8) {
     mem::set_base(base);
 }
 
+/// Guest code at [addr, addr+len) may have changed (mprotect to executable,
+/// munmap, mmap MAP_FIXED). Returns true if translations were invalidated.
+#[unsafe(no_mangle)]
+pub extern "C" fn dxcpu_code_changed(addr: u32, len: u32) -> bool {
+    crate::jit::code_changed(addr, len)
+}
+
 /// Host query "is [addr, addr+len) mapped guest memory" (speculative decoding).
 #[unsafe(no_mangle)]
 pub extern "C" fn dxcpu_set_mapped_query(f: extern "C" fn(u32, u32) -> bool) {
