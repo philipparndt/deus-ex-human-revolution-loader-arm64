@@ -905,10 +905,17 @@ static bool translate(NSEvent *e) {
         cb_event_set_u32(c, kEventParamKeyCode, typeUInt32, [e keyCode]);
         cb_event_set_u32(c, kEventParamKeyboardType, typeUInt32, LMGetKbdType());
         break;
-    case NSEventTypeLeftMouseDown: case NSEventTypeRightMouseDown: case NSEventTypeOtherMouseDown:
+    case NSEventTypeLeftMouseDown: case NSEventTypeRightMouseDown: case NSEventTypeOtherMouseDown: {
+        // Title bar / frame clicks belong to the window manager (dragging,
+        // traffic lights), as with Carbon's standard window handler.
+        NSWindow *win = [e window];
+        if (win && ([win styleMask] & NSWindowStyleMaskTitled) && !([win styleMask] & NSWindowStyleMaskFullScreen) &&
+            !NSPointInRect([e locationInWindow], [[win contentView] frame]))
+            return false;
         c = cb_event_new(kEventClassMouse, kEventMouseDown, when);
         set_mouse_params(c, e);
         break;
+    }
     case NSEventTypeLeftMouseUp: case NSEventTypeRightMouseUp: case NSEventTypeOtherMouseUp:
         c = cb_event_new(kEventClassMouse, kEventMouseUp, when);
         set_mouse_params(c, e);
