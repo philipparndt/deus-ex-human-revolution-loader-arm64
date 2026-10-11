@@ -181,8 +181,48 @@ static void msg_send(struct guest_regs *r, int arg0) {
     call_host(r, obj, cls, hs, NULL, args_at, stret, is_class);
 }
 
+// Variadic nil-terminated object lists (arrayWithObjects: etc.).
+static bool call_object_list_method(struct guest_regs *r, id recv, SEL sel, gaddr_t args_at) {
+    static SEL sels[8];
+    if (!sels[0]) {
+        sels[0] = @selector(arrayWithObjects:);
+        sels[1] = @selector(initWithObjects:);
+        sels[2] = @selector(setWithObjects:);
+        sels[3] = @selector(dictionaryWithObjectsAndKeys:);
+        sels[4] = @selector(initWithObjectsAndKeys:);
+        sels[5] = @selector(orderedSetWithObjects:);
+    }
+    int which = -1;
+    for (int i = 0; i < 6; i++)
+        if (sel == sels[i]) which = i;
+    if (which < 0) return false;
+    NSMutableArray *items = [NSMutableArray array];
+    for (gaddr_t p = args_at;; p += 4) {
+        gaddr_t g = gread32(p);
+        if (!g) break;
+        [items addObject:g2o(g)];
+    }
+    id res = nil;
+    switch (which) {
+    case 0: res = [(Class)recv arrayWithArray:items]; break;
+    case 1: res = [recv initWithArray:items]; break;
+    case 2: res = [(Class)recv setWithArray:items]; break;
+    case 5: res = [(Class)recv orderedSetWithArray:items]; break;
+    case 3:
+    case 4: {
+        NSMutableDictionary *d = [NSMutableDictionary dictionary];
+        for (NSUInteger i = 0; i + 1 < items.count; i += 2) d[items[i + 1]] = items[i];
+        res = which == 3 ? [(Class)recv dictionaryWithDictionary:d] : [recv initWithDictionary:d];
+        break;
+    }
+    }
+    r->ret = o2g(res);
+    return true;
+}
+
 static void call_host(struct guest_regs *r, id recv, Class lookup_cls, SEL sel, IMP imp, gaddr_t args_at,
                       gaddr_t stret, bool class_method) {
+    if (call_object_list_method(r, recv, sel, args_at)) return;
     if (special_format_selector(sel)) return call_format_method(r, recv, sel, args_at, lookup_cls);
     if (sel == @selector(countByEnumeratingWithState:objects:count:)) return fast_enumerate(r, recv, args_at);
     Method m = class_getInstanceMethod(lookup_cls, sel);

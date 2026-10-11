@@ -30,8 +30,6 @@ GOBJCONST(GKErrorDomain);
 GOBJCONST(GKPlayerDidChangeNotificationName);
 GOBJCONST(AVMediaTypeAudio);
 GOBJCONST(AVMediaTypeVideo);
-GOBJCONST(NSDefaultRunLoopMode);
-GOBJCONST(NSRunLoopCommonModes);
 GOBJCONST(NSModalPanelRunLoopMode);
 GOBJCONST(NSEventTrackingRunLoopMode);
 GOBJCONST(NSApplicationDidFinishLaunchingNotification);

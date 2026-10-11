@@ -107,7 +107,8 @@ static void add_methods(struct gmethod **list, int *n, int *cap, gaddr_t mlist, 
 static void add_method_lists(struct gmethod **list, int *n, int *cap, gaddr_t cls) {
     gaddr_t ml = gread32(cls + GCLS_METHODS);
     if (!ml) return;
-    if (gread32(cls + GCLS_INFO) & CLS_NO_METHOD_ARRAY) {
+    // Compiled classes point directly at one method list unless CLS_METHOD_ARRAY is set.
+    if (!(gread32(cls + GCLS_INFO) & CLS_METHOD_ARRAY)) {
         add_methods(list, n, cap, ml, false);
     } else {
         for (int i = 0;; i++) {

@@ -32,7 +32,7 @@ enum {
 };
 #define CLS_CLASS 0x1
 #define CLS_META 0x2
-#define CLS_NO_METHOD_ARRAY 0x4000
+#define CLS_METHOD_ARRAY 0x100
 
 struct gmethod {
     gaddr_t sel; // unique guest SEL
