@@ -161,6 +161,13 @@ pub extern "C" fn dxcpu_print_stats() {
         crate::jit::DISPATCH_COUNT.swap(0, Ordering::Relaxed),
         total
     );
+    if let Some(m) = crate::jit::ADDR_COUNTS.lock().unwrap().take() {
+        let mut a: Vec<(u64, u32)> = m.into_iter().map(|(k, c)| (c, k)).collect();
+        a.sort_by(|x, y| y.cmp(x));
+        for (c, ip) in a.iter().take(10) {
+            eprintln!("  at {:#010x}: {}", ip, c);
+        }
+    }
     for (c, i) in v.iter().take(25) {
         let m: iced_x86::Mnemonic = unsafe { std::mem::transmute(*i as u16) };
         eprintln!("  fallback {:>12} x {:?}", c, m);

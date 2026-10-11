@@ -910,6 +910,26 @@ static void t_unaligned(uint32_t a, uint32_t b) {
     }
 }
 
+/* pushfd/popfd: flags from lazy producers into a register, and arbitrary flags
+   back through popfd (HR's GL context wrapper keeps ZF across a call this way). */
+static void t_pushpop(uint32_t a, uint32_t b) {
+    volatile uint32_t m = a;
+    uint32_t f1, f2, f3, cc;
+    __asm__ volatile("cmpl %2, %1; pushfl; popl %0" : "=r"(f1) : "r"(a), "r"(b) : "cc");
+    __asm__ volatile("decl %1; pushfl; popl %0" : "=r"(f2), "+m"(m) : : "cc");
+    __asm__ volatile("stc; adcl %2, %1; shll $3, %1; pushfl; popl %0" : "=r"(f3), "+r"(a) : "r"(b) : "cc");
+    mix(f1 & DEF); mix(f2 & DEF); mix(f3 & 0x0c5); /* OF, AF undefined after shl 3 */
+    { uint8_t cb[16];
+      uint32_t v = (b ^ 0x8d5) & 0x8d5; /* arbitrary arithmetic flags (TF would trap on hardware) */
+      __asm__ volatile("pushl %0; popfl; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : : "r"(v), "D"(cb) : "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
+    mix(cc);
+    { uint8_t cb[16];
+      __asm__ volatile("decl %0; pushfl; popl %%eax; xorl %%ecx, %%ecx; addl $1, %%ecx; pushl %%eax; popfl; " "seto 0(%%edi); " "setno 1(%%edi); " "setb 2(%%edi); " "setae 3(%%edi); " "sete 4(%%edi); " "setne 5(%%edi); " "setbe 6(%%edi); " "seta 7(%%edi); " "sets 8(%%edi); " "setns 9(%%edi); " "setp 10(%%edi); " "setnp 11(%%edi); " "setl 12(%%edi); " "setge 13(%%edi); " "setle 14(%%edi); " "setg 15(%%edi); "  : "+m"(m) : "D"(cb) : "eax", "ecx", "cc", "memory");
+      cc = 0; for (int k = 0; k < 16; k++) cc = cc << 1 | cb[k]; }
+    mix(cc);
+}
+
 int main(void) {
     for (unsigned i = 0; i < NV; i++)
         for (unsigned j = 0; j < NV; j++) {
@@ -941,6 +961,7 @@ int main(void) {
             cat = 4;
             t_cmpxchg(a, b, c); t_cmpxchg(a, a, c);
             t_unaligned(a, b);
+            t_pushpop(a, b);
             cat = 5;
             t_shldl_0(a, b);
             t_shldl_1(a, b);

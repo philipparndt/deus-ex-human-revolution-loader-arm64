@@ -323,11 +323,25 @@ fn jit_off() -> u32 {
     })
 }
 
+/// DXCPU_STATS_ADDR=<Mnemonic>: also count the guest addresses where that
+/// mnemonic is interpreted (printed with the stats).
+pub static ADDR_COUNTS: std::sync::Mutex<Option<HashMap<u32, u64>>> = std::sync::Mutex::new(None);
+fn stats_addr_mnemonic() -> Option<&'static str> {
+    static M: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    M.get_or_init(|| std::env::var("DXCPU_STATS_ADDR").ok()).as_deref()
+}
+
 extern "C" fn helper_interp(ctx: *mut JitCtx, insn: *const Instruction) -> u32 {
     let ctx = unsafe { &mut *ctx };
     let insn = unsafe { &*insn };
     if STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
         FALLBACK_COUNT[(insn.mnemonic() as usize) & 2047].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(want) = stats_addr_mnemonic() {
+            if format!("{:?}", insn.mnemonic()) == want {
+                let mut g = ADDR_COUNTS.lock().unwrap();
+                *g.get_or_insert_with(HashMap::new).entry(insn.ip32()).or_insert(0) += 1;
+            }
+        }
     }
     ctx.materialize();
     let st = unsafe { &mut *ctx.state };
@@ -2260,6 +2274,47 @@ impl Translator {
                     self.dirty = false;
                     self.fc_cf = false;
                 }
+            }
+            // pushfd/popfd (HR's GL context wrapper saves ZF across CGLUnlockContext
+            // ~580k times/s). Same masks as the interpreter.
+            Pushfd => {
+                self.flush_flags();
+                self.xmm_spill();
+                self.a.ldr_imm(2, T0, CTX, OFF_FKIND);
+                let mat = self.a.cbz_w_fixup(T0);
+                self.a.mov_x(0, CTX);
+                self.a.ldr_imm(3, 16, CTX, OFF_HELPER_FLAGS);
+                self.a.blr(16);
+                self.a.bind(mat);
+                self.a.ldr_imm(2, T0, CTX, OFF_EFLAGS);
+                self.a.mov_w_imm(T1, 0x00fc_0fd5);
+                self.a.and_w(T0, T0, T1);
+                self.a.mov_w_imm(T1, 2);
+                self.a.orr_w(T0, T0, T1);
+                let esp = G[ESP];
+                self.a.sub_w_imm(esp, esp, 4);
+                self.a.str_uxtw(2, T0, BASE, esp);
+                self.nzcv = None;
+                self.dirty = false;
+                self.fc_cf = false;
+            }
+            Popfd => {
+                // all arithmetic flags come from the stack: pending lazy flags are dead
+                let esp = G[ESP];
+                self.a.ldr_uxtw(2, T0, BASE, esp);
+                self.a.add_w_imm(esp, esp, 4);
+                self.a.ldr_imm(2, T1, CTX, OFF_EFLAGS);
+                self.a.mov_w_imm(T2, 0x0024_4dd5);
+                self.a.bic_w(T1, T1, T2);
+                self.a.and_w(T0, T0, T2);
+                self.a.orr_w(T1, T1, T0);
+                self.a.mov_w_imm(T2, 2);
+                self.a.orr_w(T1, T1, T2);
+                self.a.str_imm(2, T1, CTX, OFF_EFLAGS);
+                self.a.str_imm(2, XZR, CTX, OFF_FKIND);
+                self.nzcv = None;
+                self.dirty = false;
+                self.fc_cf = false;
             }
             Imul if !flags_live && insn.op_count() >= 2 && size == 4 => {
                 if insn.op_count() == 3 {
