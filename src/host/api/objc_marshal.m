@@ -348,6 +348,8 @@ static void conv_g2h(const struct ty *gt, gaddr_t src, const struct ty *ht, uint
             p = calloc(1, hp->size);
             conv_g2h(gp, g, hp, p, NULL);
             fx->f[fx->n++] = (struct fixup){hp->code == '@' ? 1 : 2, g, p, (struct ty *)gp, (struct ty *)hp};
+        } else if (g && hobj_is_handle(g)) {
+            p = hobj_unwrap(g); // opaque host object passed back by the guest
         } else if (g) {
             p = g2h(g);
         }
@@ -424,8 +426,9 @@ static void conv_h2g(const struct ty *ht, const uint8_t *src, const struct ty *g
             if (gt->code == '*') {
                 gwrite32(dst, guest_static_string(5, p)); // host C string -> guest copy
             } else {
-                LOGD("objc: host pointer %p returned to guest", p);
-                gwrite32(dst, 0);
+                // Opaque host pointers (CGLContextObj, CGContextRef, ...) become
+                // handles, the same ones the C API thunks use.
+                gwrite32(dst, hobj_wrap(p));
             }
         } else
             gwrite32(dst, p ? h2g(p) : 0);

@@ -7,6 +7,8 @@
 #include "macho.h"
 #include "cpu.h"
 
+#include <dlfcn.h>
+#include <execinfo.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,10 +17,21 @@
 
 static void describe(const char *what, uint64_t a) {
     char buf[256];
+    Dl_info di;
     if (a < 0x100000000ULL && host_ptr_in_guest(guest_base + a))
         LOGE("  %-6s %#010llx  %s", what, a, macho_describe_addr((gaddr_t)a, buf, sizeof buf));
+    else if (dladdr((void *)a, &di) && di.dli_fname)
+        LOGE("  %-6s %#llx  %s`%s+%#llx", what, a, strrchr(di.dli_fname, '/') ? strrchr(di.dli_fname, '/') + 1 : di.dli_fname,
+             di.dli_sname ? di.dli_sname : "?", di.dli_saddr ? a - (uint64_t)di.dli_saddr : 0);
     else
         LOGE("  %-6s %#llx", what, a);
+}
+
+static void host_backtrace(void) {
+    void *frames[32];
+    int n = backtrace(frames, 32);
+    LOGE("host backtrace:");
+    for (int i = 2; i < n; i++) describe("  ", (uint64_t)frames[i]);
 }
 
 static bool readable(gaddr_t a) { return gmem_is_mapped(a & ~3u, 4); }
@@ -86,6 +99,7 @@ static void handler(int sig, siginfo_t *si, void *uctx) {
         guest_backtrace(esp, ebp);
     }
 #endif
+    host_backtrace();
     signal(sig, SIG_DFL);
     _exit(128 + sig);
 }

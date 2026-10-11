@@ -9,6 +9,8 @@
 #include "blocks.h"
 #include "objc_sigs.h"
 
+#include <pthread.h>
+
 extern const struct gmethod *hostcat_find(Class cls, gaddr_t sel, bool class_method);
 extern _Thread_local id shadow_dealloc_in_progress;
 extern _Thread_local bool shadow_host_dealloc_done;
@@ -104,6 +106,22 @@ static void call_host(struct guest_regs *r, id recv, Class lookup_cls, SEL sel, 
                       gaddr_t stret, bool class_method);
 
 static bool special_format_selector(SEL sel);
+
+// Methods that must run on the main thread on current macOS.
+static bool needs_main_thread(id recv, SEL sel) {
+    static Class glctx, view, window, app;
+    if (!glctx) {
+        glctx = [NSOpenGLContext class];
+        view = [NSView class];
+        window = [NSWindow class];
+        app = [NSApplication class];
+    }
+    if (object_isClass(recv)) return false;
+    if ([recv isKindOfClass:glctx])
+        return sel == @selector(update) || sel == @selector(setView:) || sel == @selector(clearDrawable) ||
+               sel == @selector(view);
+    return [recv isKindOfClass:view] || [recv isKindOfClass:window] || [recv isKindOfClass:app];
+}
 static void call_format_method(struct guest_regs *r, id recv, SEL sel, gaddr_t args_at, Class lookup);
 static void fast_enumerate(struct guest_regs *r, id recv, gaddr_t args_at);
 
@@ -255,7 +273,21 @@ static void call_host(struct guest_regs *r, id recv, Class lookup_cls, SEL sel, 
     LOGT("objc: %c[%s %s] host %s guest %s", class_method ? '+' : '-', class_getName(lookup_cls), sel_getName(sel),
          htypes, mc.gtypes ? mc.gtypes : "(derived)");
     @try {
-        marshal_call_host(recv, sel, imp, &mc);
+        if (needs_main_thread(recv, sel) && !pthread_main_np()) {
+            // Modern AppKit traps when views/windows (and NSOpenGLContext's
+            // view updates) are touched off the main thread; 2014 code did that.
+            __block NSException *exc = nil;
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                @try {
+                    marshal_call_host(recv, sel, imp, &mc);
+                } @catch (NSException *e) {
+                    exc = [e retain];
+                }
+            });
+            if (exc) @throw [exc autorelease];
+        } else {
+            marshal_call_host(recv, sel, imp, &mc);
+        }
     } @catch (NSException *e) {
         LOGI("objc: host exception %s in %s: %s", e.name.UTF8String, sel_getName(sel), e.reason.UTF8String ?: "");
         [e retain];

@@ -237,6 +237,12 @@ int main(int argc, char **argv) {
     // Initializers: dependencies first (reverse load order), main executable last.
     for (int i = nloaded - 1; i >= 0; i--) run_initializers(loaded[i]);
 
+    // On macOS dyld runs initializers deep inside its own frames, so main()
+    // later gets untouched, zero-filled stack memory. Some games (HR) rely on
+    // that by accident (uninitialised members of large stack objects), so
+    // hand main() a clean stack like the kernel would.
+    memset(g2h(stack_lo), 0, sp - stack_lo);
+
     LOGI("starting %s at %#x", exe_path, exe->entry);
     cpu_start(exe->entry, sp);
 }
