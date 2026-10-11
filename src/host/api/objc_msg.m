@@ -199,6 +199,49 @@ static void msg_send(struct guest_regs *r, int arg0) {
     call_host(r, obj, cls, hs, NULL, args_at, stret, is_class);
 }
 
+// (const id *objects, [const id *keys,] NSUInteger count) constructors: the generic
+// marshaller would convert only the first element of the C array.
+static bool call_counted_object_method(struct guest_regs *r, id recv, SEL sel, gaddr_t args_at) {
+    static SEL one[4], two[2];
+    if (!one[0]) {
+        one[0] = @selector(arrayWithObjects:count:);
+        one[1] = @selector(initWithObjects:count:);
+        one[2] = @selector(setWithObjects:count:);
+        one[3] = @selector(orderedSetWithObjects:count:);
+        two[0] = @selector(dictionaryWithObjects:forKeys:count:);
+        two[1] = @selector(initWithObjects:forKeys:count:);
+    }
+    int arrays = 0;
+    for (int i = 0; i < 4; i++)
+        if (sel == one[i]) arrays = 1;
+    for (int i = 0; i < 2; i++)
+        if (sel == two[i]) arrays = 2;
+    if (!arrays) return false;
+    uint32_t n = gread32(args_at + 4 * arrays);
+    id *bufs[2] = {NULL, NULL};
+    for (int a = 0; a < arrays; a++) {
+        gaddr_t g = gread32(args_at + 4 * a);
+        bufs[a] = calloc(n ? n : 1, sizeof(id));
+        for (uint32_t i = 0; i < n; i++) bufs[a][i] = g2o(gread32(g + 4 * i));
+    }
+    id res;
+    @try {
+        if (arrays == 1) res = ((id (*)(id, SEL, id *, NSUInteger))objc_msgSend)(recv, sel, bufs[0], n);
+        else res = ((id (*)(id, SEL, id *, id *, NSUInteger))objc_msgSend)(recv, sel, bufs[0], bufs[1], n);
+    } @catch (NSException *e) {
+        free(bufs[0]);
+        free(bufs[1]);
+        LOGI("objc: host exception %s in %s: %s", e.name.UTF8String, sel_getName(sel), e.reason.UTF8String ?: "");
+        [e retain];
+        guest_throw(r, o2g(e));
+        return true;
+    }
+    free(bufs[0]);
+    free(bufs[1]);
+    r->ret = o2g(res);
+    return true;
+}
+
 // Variadic nil-terminated object lists (arrayWithObjects: etc.).
 static bool call_object_list_method(struct guest_regs *r, id recv, SEL sel, gaddr_t args_at) {
     static SEL sels[8];
@@ -241,6 +284,7 @@ static bool call_object_list_method(struct guest_regs *r, id recv, SEL sel, gadd
 static void call_host(struct guest_regs *r, id recv, Class lookup_cls, SEL sel, IMP imp, gaddr_t args_at,
                       gaddr_t stret, bool class_method) {
     if (call_object_list_method(r, recv, sel, args_at)) return;
+    if (call_counted_object_method(r, recv, sel, args_at)) return;
     if (special_format_selector(sel)) return call_format_method(r, recv, sel, args_at, lookup_cls);
     if (sel == @selector(countByEnumeratingWithState:objects:count:)) return fast_enumerate(r, recv, args_at);
     Method m = class_getInstanceMethod(lookup_cls, sel);
@@ -277,6 +321,8 @@ static void call_host(struct guest_regs *r, id recv, Class lookup_cls, SEL sel, 
             // Modern AppKit traps when views/windows (and NSOpenGLContext's
             // view updates) are touched off the main thread; 2014 code did that.
             __block NSException *exc = nil;
+            extern void cgl_drop_held_locks(void), cgl_retake_held_locks(void);
+            cgl_drop_held_locks(); // the main thread may be waiting for them
             dispatch_sync(dispatch_get_main_queue(), ^{
                 @try {
                     marshal_call_host(recv, sel, imp, &mc);
@@ -284,6 +330,7 @@ static void call_host(struct guest_regs *r, id recv, Class lookup_cls, SEL sel, 
                     exc = [e retain];
                 }
             });
+            cgl_retake_held_locks();
             if (exc) @throw [exc autorelease];
         } else {
             marshal_call_host(recv, sel, imp, &mc);
@@ -527,14 +574,57 @@ THUNK(NSLogv) {
 }
 
 // --- guest blocks passed to host APIs -------------------------------------------------------------
-// The block signature is unknown; completion handlers usually take objects,
-// so arguments are converted as objects.
+// Parameter types come from the block's clang signature (BLOCK_HAS_SIGNATURE);
+// without one, up to three object arguments are assumed (completion handlers).
+// Integer/pointer arguments arrive in the same host registers as objects.
+static int guest_block_params(gaddr_t b, char kinds[3]) {
+    uint32_t flags = gread32(b + 4);
+    gaddr_t desc = gread32(b + 16);
+    if (!(flags & (1u << 30)) || !desc) {
+        memset(kinds, '@', 3);
+        return 3;
+    }
+    gaddr_t sig_at = desc + 8 + ((flags & (1u << 25)) ? 8 : 0);
+    const char *sig = g2h(gread32(sig_at));
+    // "v12@?0@4c8": return type, then the block itself, then the parameters
+    int n = -2;
+    for (const char *t = sig; *t && n < 3;) {
+        while (*t && strchr("rnNoORV", *t)) t++;
+        char k = *t;
+        if (n >= 0) kinds[n] = k;
+        if (k == '@' && t[1] == '?') t++;
+        if (k == '@' && t[1] == '"') for (t += 2; *t && *t != '"'; t++) {}
+        if (k == '^') while (*t == '^') t++;
+        if (k == '{' || k == '(') {
+            int depth = 0;
+            do {
+                if (*t == '{' || *t == '(') depth++;
+                else if (*t == '}' || *t == ')') depth--;
+                t++;
+            } while (*t && depth);
+            t--;
+        }
+        if (*t) t++;
+        while (*t >= '0' && *t <= '9') t++;
+        n++;
+    }
+    return n < 0 ? 0 : n;
+}
+
 id guest_block_to_host(gaddr_t g) {
     gaddr_t b = gblock_copy(g);
-    void (^hb)(id, id, id) = ^(id a, id bb, id c) {
+    char kinds[3];
+    int n = guest_block_params(b, kinds);
+    uint32_t objs = 0; // bit i: parameter i is an object
+    for (int i = 0; i < n; i++)
+        if (kinds[i] == '@') objs |= 1u << i;
+    void (^hb)(uintptr_t, uintptr_t, uintptr_t) = ^(uintptr_t a0, uintptr_t a1, uintptr_t a2) {
         cpu_thread_attach();
-        uint32_t args[4] = {b, o2g(a), o2g(bb), o2g(c)};
-        cpu_call(gread32(b + 12), 4, args);
+        uintptr_t in[3] = {a0, a1, a2};
+        uint32_t args[4] = {b};
+        for (int i = 0; i < n; i++)
+            args[i + 1] = (objs >> i) & 1 ? o2g((__bridge id)(void *)in[i]) : (uint32_t)in[i];
+        cpu_call(gread32(b + 12), 1 + n, args);
     };
     return [[hb copy] autorelease];
 }

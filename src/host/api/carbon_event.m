@@ -58,7 +58,12 @@ id cb_unwrap(gaddr_t g, Class cls) {
 
 void cb_on_main(void (^blk)(void)) {
     if ([NSThread isMainThread]) blk();
-    else dispatch_sync(dispatch_get_main_queue(), blk);
+    else {
+        extern void cgl_drop_held_locks(void), cgl_retake_held_locks(void);
+        cgl_drop_held_locks(); // see objc_msg.m
+        dispatch_sync(dispatch_get_main_queue(), blk);
+        cgl_retake_held_locks();
+    }
 }
 
 double cb_now(void) {
@@ -971,6 +976,9 @@ static int app_loop_depth;
 
 // Make a pending nextEventMatchingMask (main thread) return, e.g. after a timer
 // callback quit the loop or posted an event.
+void cb_wake_main(void);
+static void wake_main(void);
+void cb_wake_main(void) { wake_main(); }
 static void wake_main(void) {
     if (atomic_exchange(&wake_pending, true)) return;
     @autoreleasepool {
@@ -1141,7 +1149,10 @@ static bool run_secondary(CBLoop *l, double timeout) {
     }
 }
 
-static OSStatus receive(uint32_t n, gaddr_t list, double timeout, bool pull, CBEvent **out) {
+// stop (optional): checked after every pumped event; returns eventLoopTimedOutErr when it
+// becomes true, so dispatch loops notice quit flags set by handlers run from AppKit.
+static OSStatus receive_until(uint32_t n, gaddr_t list, double timeout, bool pull, CBEvent **out,
+                              bool (^stop)(void)) {
     *out = nil;
     if (![NSThread isMainThread]) {
         // Secondary threads have no events of their own here.
@@ -1165,7 +1176,12 @@ static OSStatus receive(uint32_t n, gaddr_t list, double timeout, bool pull, CBE
         }
         pump(rem);
         pumped = true;
+        if (stop && stop()) return eventLoopTimedOutErr;
     }
+}
+
+static OSStatus receive(uint32_t n, gaddr_t list, double timeout, bool pull, CBEvent **out) {
+    return receive_until(n, list, timeout, pull, out, nil);
 }
 
 // ReceiveNextEvent(numTypes, list, EventTimeout (double), Boolean pull, EventRef *out)
@@ -1200,7 +1216,7 @@ THUNK(RunCurrentEventLoop) { RET(run_loop_for(ARGD(0))); }
 static void dispatch_loop(bool (^stop)(void)) {
     while (!stop()) {
         CBEvent *e = nil;
-        OSStatus st = receive(0, 0, -1, true, &e);
+        OSStatus st = receive_until(0, 0, -1, true, &e, stop);
         if (st == eventLoopQuitErr) break;
         if (e) {
             last_event_mods = 0;

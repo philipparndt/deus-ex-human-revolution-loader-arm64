@@ -867,6 +867,8 @@ THUNK(QuitAppModalLoopForWindow) {
     CBWindow *w = WIN(0);
     if (!w) RET(errInvalidWindowRef);
     w->modal_quit = true;
+    extern void cb_wake_main(void);
+    cb_wake_main(); // the modal loop may be blocked waiting for events
     RET(noErr);
 }
 
@@ -898,8 +900,10 @@ THUNK(SetAutomaticControlDragTrackingEnabledForWindow) { RET(noErr); }
 
 // -[NSWindow initWithWindowRef:] returns the window's own NSWindow.
 static id ns_initWithWindowRef(id self, SEL _cmd, void *ref) {
-    CBWindow *w = CB_UNWRAP(CBWindow, h2g(ref));
-    LOGI("carbon: -[NSWindow initWithWindowRef:%#x] -> %p", h2g(ref), w ? w->ns : nil);
+    // The ObjC bridge passes guest handles of opaque pointers unwrapped (the
+    // CBWindow itself); host callers would pass the guest-visible pointer.
+    CBWindow *w = host_ptr_in_guest(ref) ? CB_UNWRAP(CBWindow, h2g(ref)) : (__bridge CBWindow *)ref;
+    LOGI("carbon: -[NSWindow initWithWindowRef:%p] -> %p", ref, w ? w->ns : nil);
     [self release];
     return w ? [w->ns retain] : nil;
 }

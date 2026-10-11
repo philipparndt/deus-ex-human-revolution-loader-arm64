@@ -420,13 +420,37 @@ THUNK(RestoreApplicationDockTileImage) {
 
 // --- text input sources / keyboard layouts -------------------------------------------------------------------------
 
-THUNK(TISCopyCurrentKeyboardInputSource) { RET(cfg(TISCopyCurrentKeyboardInputSource())); }
-THUNK(TISCopyCurrentKeyboardLayoutInputSource) { RET(cfg(TISCopyCurrentKeyboardLayoutInputSource())); }
-THUNK(TISCopyCurrentASCIICapableKeyboardInputSource) { RET(cfg(TISCopyCurrentASCIICapableKeyboardInputSource())); }
-THUNK(TISCopyCurrentASCIICapableKeyboardLayoutInputSource) {
-    RET(cfg(TISCopyCurrentASCIICapableKeyboardLayoutInputSource()));
+// Modern HIToolbox asserts that input sources are queried on the main queue.
+static TISInputSourceRef tis_on_main(TISInputSourceRef (*fn)(void)) {
+    __block TISInputSourceRef s;
+    cb_on_main(^{
+      s = fn();
+    });
+    return s;
 }
-THUNK(TISSelectInputSource) { RET(TISSelectInputSource((TISInputSourceRef)ARGCF(0))); }
+static void *tis_prop(TISInputSourceRef src, CFStringRef key) {
+    __block void *v;
+    cb_on_main(^{
+      v = TISGetInputSourceProperty(src, key);
+    });
+    return v;
+}
+THUNK(TISCopyCurrentKeyboardInputSource) { RET(cfg(tis_on_main(TISCopyCurrentKeyboardInputSource))); }
+THUNK(TISCopyCurrentKeyboardLayoutInputSource) { RET(cfg(tis_on_main(TISCopyCurrentKeyboardLayoutInputSource))); }
+THUNK(TISCopyCurrentASCIICapableKeyboardInputSource) {
+    RET(cfg(tis_on_main(TISCopyCurrentASCIICapableKeyboardInputSource)));
+}
+THUNK(TISCopyCurrentASCIICapableKeyboardLayoutInputSource) {
+    RET(cfg(tis_on_main(TISCopyCurrentASCIICapableKeyboardLayoutInputSource)));
+}
+THUNK(TISSelectInputSource) {
+    TISInputSourceRef src = (TISInputSourceRef)ARGCF(0);
+    __block OSStatus st;
+    cb_on_main(^{
+      st = TISSelectInputSource(src);
+    });
+    RET(st);
+}
 
 static char uchr_key;
 
@@ -435,7 +459,7 @@ static char uchr_key;
 static CFDataRef guest_uchr(TISInputSourceRef src) {
     CFDataRef g = cf_attached(src, &uchr_key);
     if (g) return g;
-    CFDataRef d = TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData);
+    CFDataRef d = tis_prop(src, kTISPropertyUnicodeKeyLayoutData);
     if (!d) return NULL;
     g = CFDataCreate(cf_guest_heap_allocator(), CFDataGetBytePtr(d), CFDataGetLength(d));
     cf_attach(src, &uchr_key, (void *)g, (void (*)(void *))CFRelease);
@@ -448,12 +472,12 @@ THUNK(TISGetInputSourceProperty) {
     CFStringRef key = ARGSTR(1);
     if (!src || !key) RET(0);
     if (CFEqual(key, kTISPropertyUnicodeKeyLayoutData)) RET(cfg(guest_uchr(src)));
-    RET(cfg(TISGetInputSourceProperty(src, key)));
+    RET(cfg(tis_prop(src, key)));
 }
 
 THUNK(KLGetCurrentKeyboardLayout) {
     static TISInputSourceRef cur;
-    TISInputSourceRef s = TISCopyCurrentKeyboardLayoutInputSource();
+    TISInputSourceRef s = tis_on_main(TISCopyCurrentKeyboardLayoutInputSource);
     if (cur) CFRelease(cur);
     cur = s;
     if (ARG(0)) gwrite32(ARG(0), cfg(s));
@@ -475,9 +499,9 @@ THUNK(KLGetKeyboardLayoutProperty) {
     case kKLKCHRData: RET(paramErr);
     case kKLKind: v = kKLuchrKind; break;
     case kKLIdentifier: v = 0; break;
-    case kKLLocalizedName: case kKLName: v = cfg(TISGetInputSourceProperty(src, kTISPropertyLocalizedName)); break;
+    case kKLLocalizedName: case kKLName: v = cfg(tis_prop(src, kTISPropertyLocalizedName)); break;
     case kKLLanguageCode: {
-        CFArrayRef a = TISGetInputSourceProperty(src, kTISPropertyInputSourceLanguages);
+        CFArrayRef a = tis_prop(src, kTISPropertyInputSourceLanguages);
         v = a && CFArrayGetCount(a) ? cfg(CFArrayGetValueAtIndex(a, 0)) : 0;
         break;
     }

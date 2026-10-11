@@ -237,8 +237,43 @@ THUNK(CGLCopyContext) { RET(CGLCopyContext(CTX(0), CTX(1), ARG(2))); }
 THUNK(CGLSetCurrentContext) { RET(CGLSetCurrentContext(CTX(0))); }
 THUNK(CGLGetCurrentContext) { RET(hobj_wrap(CGLGetCurrentContext())); }
 THUNK(CGLGetShareGroup) { RET(hobj_wrap(CGLGetShareGroup(CTX(0)))); }
-THUNK(CGLLockContext) { RET(CGLLockContext(CTX(0))); }
-THUNK(CGLUnlockContext) { RET(CGLUnlockContext(CTX(0))); }
+// Context locks held by the current thread (CGL locks are recursive). A thread
+// that hops to the main thread (objc_msg.m) drops them meanwhile: AppKit's GL
+// view layer takes the same lock on the main thread (e.g. entering fullscreen).
+#define CGL_HELD_MAX 8
+static __thread struct { CGLContextObj ctx; int depth; } cgl_held[CGL_HELD_MAX];
+
+THUNK(CGLLockContext) {
+    CGLContextObj c = CTX(0);
+    CGLError e = CGLLockContext(c);
+    if (e == kCGLNoError) {
+        int free_slot = -1;
+        for (int i = 0; i < CGL_HELD_MAX; i++) {
+            if (cgl_held[i].ctx == c) {
+                cgl_held[i].depth++;
+                RET(e);
+            }
+            if (!cgl_held[i].ctx && free_slot < 0) free_slot = i;
+        }
+        if (free_slot >= 0) cgl_held[free_slot].ctx = c, cgl_held[free_slot].depth = 1;
+    }
+    RET(e);
+}
+THUNK(CGLUnlockContext) {
+    CGLContextObj c = CTX(0);
+    for (int i = 0; i < CGL_HELD_MAX; i++)
+        if (cgl_held[i].ctx == c && --cgl_held[i].depth == 0) cgl_held[i].ctx = NULL;
+    RET(CGLUnlockContext(c));
+}
+
+void cgl_drop_held_locks(void) {
+    for (int i = 0; i < CGL_HELD_MAX; i++)
+        for (int d = 0; cgl_held[i].ctx && d < cgl_held[i].depth; d++) CGLUnlockContext(cgl_held[i].ctx);
+}
+void cgl_retake_held_locks(void) {
+    for (int i = 0; i < CGL_HELD_MAX; i++)
+        for (int d = 0; cgl_held[i].ctx && d < cgl_held[i].depth; d++) CGLLockContext(cgl_held[i].ctx);
+}
 THUNK(CGLUpdateContext) { RET(CGLUpdateContext(CTX(0))); }
 
 THUNK(CGLFlushDrawable) { RET(CGLFlushDrawable(CTX(0))); }
