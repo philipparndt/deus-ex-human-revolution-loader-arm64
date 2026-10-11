@@ -8,7 +8,7 @@
 
 static pthread_key_t key;
 static volatile int destructed;
-static void dtor(void *v) { if ((intptr_t)v == 77) destructed++; }
+static void dtor(void *v) { if ((intptr_t)v == 77) __sync_fetch_and_add(&destructed, 1); } // threads exit concurrently
 static double now(void) { struct timeval tv; gettimeofday(&tv, 0); return tv.tv_sec + tv.tv_usec * 1e-6; }
 
 struct arg { pthread_t self_seen; int ok; int n; };
