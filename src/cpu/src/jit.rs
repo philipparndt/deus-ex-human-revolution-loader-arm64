@@ -94,6 +94,24 @@ pub struct JitCtx {
     pub engine: *mut Engine,  // 104
     pub exit_reason: u32,     // 112
     pub pad: u32,             // 116
+    pub ibtc: *mut IbEntry,   // 120: indirect branch target cache of the running Jit
+}
+
+/// Indirect branch target cache entry: guest eip -> translated block (see exit_indirect).
+/// Empty entries hold eip 0xffffffff, which is never a block start (a guest jump to
+/// 0 must fault, not hit an empty entry).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct IbEntry {
+    eip: u32,
+    pad: u32,
+    code: usize,
+}
+const IBTC_BITS: u32 = 12;
+const IBTC_SIZE: usize = 1 << IBTC_BITS;
+#[inline]
+fn ibtc_hash(eip: u32) -> usize {
+    ((eip ^ (eip >> 11)) & (IBTC_SIZE as u32 - 1)) as usize
 }
 
 const OFF_EIP: u32 = 32;
@@ -107,6 +125,7 @@ const OFF_BASE: u32 = 64;
 const OFF_HELPER_INTERP: u32 = 72;
 const OFF_HELPER_COND: u32 = 88;
 const OFF_STATE: u32 = 96;
+const OFF_IBTC: u32 = 120;
 
 impl JitCtx {
     pub fn new(state: *mut CpuState, engine: *mut Engine) -> Self {
@@ -128,6 +147,7 @@ impl JitCtx {
             engine,
             exit_reason: 0,
             pad: 0,
+            ibtc: std::ptr::null_mut(),
         }
     }
 
@@ -268,6 +288,8 @@ pub struct Jit {
     /// Translate SSE floating point natively (only valid while MXCSR has the
     /// default control bits 0x1f80; see JitEngine::run).
     fp_ok: bool,
+    /// Indirect branch target cache (filled by run_once, read by translated code).
+    ibtc: Box<[IbEntry]>,
 }
 
 const BUF_SIZE: usize = 64 << 20;
@@ -318,6 +340,7 @@ impl Jit {
             stub_hi,
             translated: 0,
             fp_ok,
+            ibtc: vec![IbEntry { eip: u32::MAX, pad: 0, code: 0 }; IBTC_SIZE].into_boxed_slice(),
         }
     }
 
@@ -344,6 +367,10 @@ impl Jit {
             Some(&c) => c,
             None => self.translate(ctx.eip),
         };
+        if !verify_on() {
+            self.ibtc[ibtc_hash(ctx.eip)] = IbEntry { eip: ctx.eip, pad: 0, code: code as usize };
+        }
+        ctx.ibtc = self.ibtc.as_mut_ptr();
         (self.enter)(ctx as *mut JitCtx, code)
     }
 
@@ -939,6 +966,20 @@ impl Translator {
     /// Exit with the guest eip in register `r`.
     fn exit_indirect(&mut self, r: u32) {
         self.xmm_writeback();
+        debug_assert!(r != T1 && r != T2 && r != T3);
+        // Inline lookup in the indirect branch target cache; a hit enters the
+        // block directly (same entry state as a linked direct exit).
+        self.a.eor_w_lsr(T1, r, r, 11);
+        self.a.ubfx_w(T1, T1, 0, IBTC_BITS);
+        self.a.lsl_w_imm(T1, T1, 4);
+        self.a.ldr_imm(3, T2, CTX, OFF_IBTC);
+        self.a.add_x(T2, T2, T1);
+        self.a.ldr_imm(2, T3, T2, 0);
+        self.a.cmp_w(T3, r);
+        let miss = self.a.bcond_fixup(Cond::Ne);
+        self.a.ldr_imm(3, T3, T2, 8);
+        self.a.br(T3);
+        self.a.bind(miss);
         self.a.str_imm(2, r, CTX, OFF_EIP);
         self.a.mov_w_imm(0, EXIT_DISPATCH);
         self.b_exit();
