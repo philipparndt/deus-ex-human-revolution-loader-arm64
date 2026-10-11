@@ -1,6 +1,7 @@
 //! C interface (see src/host/dxcpu.h).
 
-use crate::interp::Engine;
+use crate::interp::Engine as InterpEngine;
+use crate::jit::JitEngine;
 use crate::mem;
 use crate::state::CpuState;
 use iced_x86::{Decoder, DecoderOptions, Formatter, IntelFormatter};
@@ -10,21 +11,38 @@ pub extern "C" fn dxcpu_set_guest_base(base: *mut u8) {
     mem::set_base(base);
 }
 
+/// Execution engine: JIT by default, pure interpreter with DXCPU_INTERP=1.
+pub enum Engine {
+    Jit(JitEngine),
+    Interp(InterpEngine),
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn dxcpu_engine_new(stub_lo: u32, stub_hi: u32) -> *mut Engine {
-    Box::into_raw(Box::new(Engine::new(stub_lo, stub_hi)))
+    let e = if std::env::var_os("DXCPU_INTERP").is_some() {
+        Engine::Interp(InterpEngine::new(stub_lo, stub_hi))
+    } else {
+        Engine::Jit(JitEngine::new(stub_lo, stub_hi))
+    };
+    Box::into_raw(Box::new(e))
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dxcpu_engine_flush(eng: *mut Engine) {
-    unsafe { (*eng).flush() }
+    match unsafe { &mut *eng } {
+        Engine::Jit(j) => *j = JitEngine::new(j.jit.stub_lo, j.jit.stub_hi),
+        Engine::Interp(i) => i.flush(),
+    }
 }
 
 /// Run until eip == stop or an exit; returns the Exit reason.
 #[unsafe(no_mangle)]
 pub extern "C" fn dxcpu_run(eng: *mut Engine, st: *mut CpuState, stop: u32) -> u32 {
     let (eng, st) = unsafe { (&mut *eng, &mut *st) };
-    let e = eng.run(st, stop);
+    let e = match eng {
+        Engine::Jit(j) => j.run(st, stop),
+        Engine::Interp(i) => i.run(st, stop),
+    };
     st.exit_reason = e as u32;
     e as u32
 }

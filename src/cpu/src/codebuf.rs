@@ -36,6 +36,11 @@ impl CodeBuf {
         CodeBuf { base: p as *mut u8, size, used: 0 }
     }
 
+    /// Address the next `add` will place code at.
+    pub fn next_addr(&self) -> usize {
+        self.base as usize + ((self.used + 15) & !15)
+    }
+
     pub fn remaining(&self) -> usize {
         self.size - self.used
     }
@@ -77,6 +82,12 @@ impl CodeBuf {
     }
 }
 
+impl Drop for CodeBuf {
+    fn drop(&mut self) {
+        unsafe { libc_munmap(self.base, self.size) };
+    }
+}
+
 const PROT_READ: i32 = 1;
 const PROT_WRITE: i32 = 2;
 const PROT_EXEC: i32 = 4;
@@ -86,6 +97,8 @@ const MAP_ANON: i32 = 0x1000;
 unsafe extern "C" {
     #[link_name = "mmap"]
     fn libc_mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut u8;
+    #[link_name = "munmap"]
+    fn libc_munmap(addr: *mut u8, len: usize) -> i32;
 }
 
 #[cfg(test)]

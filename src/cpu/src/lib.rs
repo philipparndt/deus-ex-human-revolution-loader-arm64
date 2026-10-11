@@ -10,6 +10,7 @@ pub mod codebuf;
 pub mod ffi;
 pub mod fpu;
 pub mod interp;
+pub mod jit;
 pub mod mem;
 pub mod sse;
 pub mod state;
