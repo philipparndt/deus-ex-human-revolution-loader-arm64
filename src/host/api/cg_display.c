@@ -401,74 +401,17 @@ THUNK(CGDisplayRestoreColorSyncSettings) {
 
 // --- cursor / events ----------------------------------------------------------------------------------
 
-// Window dragging: clicking the title bar of the (inactive) game window activates
-// it, and the game grabs the mouse at once (dissociates and recentres the cursor),
-// which kills the drag. A press that starts on the window frame (reported by
-// carbon_event.m) defers grabbing until that button is released. Presses inside
-// the game (aiming while shooting) are never affected.
-static volatile bool frame_press;  // left button went down on a window frame
-static volatile bool grab_pending; // the game asked for a grab during that press
-static volatile bool grabbed;      // mouse dissociated by the game
-
-// After a frame press the mouse stays free until the next click into the game
-// (as windowed games usually behave), not just until the button is released.
-static bool grab_blocked(void) { return frame_press; }
-
-// carbon_event.m: a mouse-down inside a window's content.
-void cg_mouse_content_press(void) {
-    if (!frame_press) return;
-    frame_press = false;
-    if (grab_pending) {
-        grab_pending = false;
-        LOGD("cg: deferred mouse grab applied (click into the game)");
-        CGAssociateMouseAndMouseCursorPosition(false);
-        grabbed = true;
-    }
-}
-
-// carbon_event.m: a mouse-down on the title bar/frame goes to AppKit.
-void cg_mouse_frame_press(void) {
-    frame_press = true;
-    if (grabbed) { // the activation already grabbed it: let the drag work
-        grabbed = false;
-        grab_pending = true;
-        CGAssociateMouseAndMouseCursorPosition(true);
-    }
-}
-
-// The app lost focus: the user must get the mouse back, and the next activation
-// (often a title bar click) starts ungrabbed.
-void cg_mouse_app_deactivated(void) {
-    grab_pending = false;
-    frame_press = false;
-    if (grabbed) {
-        grabbed = false;
-        CGAssociateMouseAndMouseCursorPosition(true);
-    }
-}
-
-static void grab_resume(void) {} // deferred grabs are applied by cg_mouse_content_press
-
 THUNK(CGWarpMouseCursorPosition) {
     CGPoint p = ARGPOINT(0);
     LOGT("cg: warp cursor to %g,%g", p.x, p.y);
-    if (env_flag("DXH_NO_MOUSE_GRAB") || grab_blocked()) { RET(kCGErrorSuccess); return; }
-    grab_resume();
-    RET(CGWarpMouseCursorPosition(p));
+    if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
+    else { RET(CGWarpMouseCursorPosition(p)); return; }
 }
 
 THUNK(CGAssociateMouseAndMouseCursorPosition) {
     LOGD("cg: CGAssociateMouseAndMouseCursorPosition(%u)", ARG(0));
     if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
-    if (!ARG(0) && grab_blocked()) {
-        LOGD("cg: mouse grab deferred (window drag)");
-        grab_pending = true;
-        RET(kCGErrorSuccess);
-        return;
-    }
-    grab_pending = false;
-    grabbed = !ARG(0);
-    RET(CGAssociateMouseAndMouseCursorPosition(ARG(0)));
+    else { RET(CGAssociateMouseAndMouseCursorPosition(ARG(0))); return; }
 }
 
 #pragma clang diagnostic push
@@ -479,11 +422,10 @@ THUNK(CGSetLocalEventsSuppressionInterval) { RET(CGSetLocalEventsSuppressionInte
 THUNK(CGDisplayHideCursor) { RET(CGDisplayHideCursor(ARG(0))); }
 THUNK(CGDisplayShowCursor) { RET(CGDisplayShowCursor(ARG(0))); }
 THUNK(CGDisplayMoveCursorToPoint) {
-    if (env_flag("DXH_NO_MOUSE_GRAB") || grab_blocked()) { RET(kCGErrorSuccess); return; }
+    if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
     else { RET(CGDisplayMoveCursorToPoint(ARG(0), ARGPOINT(1))); return; }
 }
 THUNK(CGGetLastMouseDelta) {
-    grab_resume();
     int32_t dx = 0, dy = 0;
     CGGetLastMouseDelta(&dx, &dy);
     if (ARG(0)) gwrite32(ARG(0), (uint32_t)dx);

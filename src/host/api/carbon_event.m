@@ -925,13 +925,8 @@ static bool translate(NSEvent *e) {
         // traffic lights), as with Carbon's standard window handler.
         NSWindow *win = [e window];
         if (win && ([win styleMask] & NSWindowStyleMaskTitled) && !([win styleMask] & NSWindowStyleMaskFullScreen) &&
-            !NSPointInRect([e locationInWindow], [[win contentView] frame])) {
-            extern void cg_mouse_frame_press(void); // cg_display.c: no mouse grab during the drag
-            if ([e type] == NSEventTypeLeftMouseDown) cg_mouse_frame_press();
+            !NSPointInRect([e locationInWindow], [[win contentView] frame]))
             return false;
-        }
-        extern void cg_mouse_content_press(void); // cg_display.c: grab again after a drag
-        cg_mouse_content_press();
         c = cb_event_new(kEventClassMouse, kEventMouseDown, when);
         set_mouse_params(c, e);
         break;
@@ -1439,8 +1434,6 @@ static void app_notifications(void) {
     [nc addObserverForName:NSApplicationDidResignActiveNotification object:nil queue:nil
                 usingBlock:^(NSNotification *n) {
                   LOGD("carbon: app deactivated");
-                  extern void cg_mouse_app_deactivated(void); // cg_display.c
-                  cg_mouse_app_deactivated();
                   cb_keymap_clear();
                   send_app_event(kEventAppDeactivated);
                 }];

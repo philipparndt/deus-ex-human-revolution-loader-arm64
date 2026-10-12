@@ -207,11 +207,61 @@ THUNK(AudioHardwareGetPropertyInfo) {
     }
     RET(st);
 }
+// AudioHardwareAddPropertyListener(id, OSStatus (*proc)(AudioHardwarePropertyID, void *), void *data):
+// FMOD watches the default output device and the device list this way and
+// re-opens its HAL output unit on a change (e.g. AirPods connected).
+struct hw_listener {
+    AudioObjectPropertyAddress addr;
+    gaddr_t proc, data;
+    struct hw_listener *next;
+};
+static struct hw_listener *hw_listeners;
+static pthread_mutex_t hw_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static OSStatus hw_listener_cb(AudioObjectID obj, UInt32 n, const AudioObjectPropertyAddress *addrs, void *ctx) {
+    struct hw_listener *l = ctx;
+    cpu_thread_attach();
+    for (UInt32 i = 0; i < n; i++) {
+        LOGI("audio: hardware property '%.4s' changed, notifying the game", (const char *)&addrs[i].mSelector);
+        gcall2(l->proc, addrs[i].mSelector, l->data);
+    }
+    return noErr;
+}
+
 THUNK(AudioHardwareAddPropertyListener) {
-    LOGD("audio: AudioHardwareAddPropertyListener(%.4s) ignored", (const char *)&r->esp);
+    struct hw_listener *l = calloc(1, sizeof *l);
+    l->addr = (AudioObjectPropertyAddress){ARG(0), kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    l->proc = ARG(1);
+    l->data = ARG(2);
+    OSStatus st = AudioObjectAddPropertyListener(kAudioObjectSystemObject, &l->addr, hw_listener_cb, l);
+    uint32_t id = ARG(0);
+    LOGD("audio: AudioHardwareAddPropertyListener('%c%c%c%c') = %d", id >> 24, (id >> 16) & 0xff, (id >> 8) & 0xff,
+         id & 0xff, (int)st);
+    if (st) {
+        free(l);
+        RET(st);
+        return;
+    }
+    pthread_mutex_lock(&hw_lock);
+    l->next = hw_listeners;
+    hw_listeners = l;
+    pthread_mutex_unlock(&hw_lock);
     RET(noErr);
 }
-THUNK(AudioHardwareRemovePropertyListener) { RET(noErr); }
+THUNK(AudioHardwareRemovePropertyListener) {
+    pthread_mutex_lock(&hw_lock);
+    for (struct hw_listener **p = &hw_listeners; *p; p = &(*p)->next) {
+        struct hw_listener *l = *p;
+        if (l->addr.mSelector == ARG(0) && l->proc == ARG(1)) {
+            AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &l->addr, hw_listener_cb, l);
+            *p = l->next;
+            free(l); // CoreAudio no longer calls it after the removal returns
+            break;
+        }
+    }
+    pthread_mutex_unlock(&hw_lock);
+    RET(noErr);
+}
 
 static AudioObjectPropertyScope legacy_scope(uint32_t is_input) {
     return is_input & 0xff ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput;
