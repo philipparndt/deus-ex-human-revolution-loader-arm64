@@ -217,6 +217,9 @@ static CGRect space_rect_to_global(CBWindow *w, uint32_t space, CGRect r) { retu
 
 // HIWindowCreate(WindowClass, const int *attributes, const WindowDefSpec *, HICoordinateSpace, const HIRect *bounds, WindowRef *out)
 THUNK(HIWindowCreate) {
+    // the game window (the launcher uses CreateNewWindow): HiDPI coordinates from here on
+    extern void cb_enable_pixel_coords(void);
+    if (ARG(0) == kDocumentWindowClass) cb_enable_pixel_coords();
     CGRect rc = space_rect_to_global(nil, ARG(3), get_grect(ARG(4)));
     uint32_t attrs = attrs_from_bits(ARG(1));
     __block CBWindow *w;

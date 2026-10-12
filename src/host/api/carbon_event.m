@@ -74,16 +74,33 @@ double cb_now(void) {
     return (double)mach_absolute_time() * tb.numer / tb.denom / 1e9;
 }
 
+// Global (Carbon/CG) coordinates seen by the guest are points, or pixels in the
+// HiDPI mode (DXH_DISPLAY_PIXELS=1 once the game window exists): the game then
+// renders at the display's real resolution, and every position it gets or sets
+// is scaled by cb_px (the backing scale factor). The launcher runs before, in points.
+double cb_px = 1.0;
+void cb_enable_pixel_coords(void) {
+    if (cb_px != 1.0 || !getenv("DXH_DISPLAY_PIXELS")) return;
+    __block double s = 1.0;
+    cb_on_main(^{
+      s = NSScreen.mainScreen.backingScaleFactor;
+    });
+    if (s > 1.0) {
+        cb_px = s;
+        LOGI("carbon: game coordinates in pixels (scale %g)", s);
+    }
+}
+
 double cb_main_screen_height(void) { return CGDisplayBounds(CGMainDisplayID()).size.height; }
-NSPoint cb_global_to_ns(CGPoint p) { return NSMakePoint(p.x, cb_main_screen_height() - p.y); }
-CGPoint cb_ns_to_global(NSPoint p) { return CGPointMake(p.x, cb_main_screen_height() - p.y); }
+NSPoint cb_global_to_ns(CGPoint p) { return NSMakePoint(p.x / cb_px, cb_main_screen_height() - p.y / cb_px); }
+CGPoint cb_ns_to_global(NSPoint p) { return CGPointMake(p.x * cb_px, (cb_main_screen_height() - p.y) * cb_px); }
 NSRect cb_global_rect_to_ns(CGRect rc) {
-    return NSMakeRect(rc.origin.x, cb_main_screen_height() - rc.origin.y - rc.size.height, rc.size.width,
-                      rc.size.height);
+    return NSMakeRect(rc.origin.x / cb_px, cb_main_screen_height() - (rc.origin.y + rc.size.height) / cb_px,
+                      rc.size.width / cb_px, rc.size.height / cb_px);
 }
 CGRect cb_ns_rect_to_global(NSRect rc) {
-    return CGRectMake(rc.origin.x, cb_main_screen_height() - rc.origin.y - rc.size.height, rc.size.width,
-                      rc.size.height);
+    return CGRectMake(rc.origin.x * cb_px, (cb_main_screen_height() - rc.origin.y - rc.size.height) * cb_px,
+                      rc.size.width * cb_px, rc.size.height * cb_px);
 }
 
 // --- application setup -----------------------------------------------------------------------------

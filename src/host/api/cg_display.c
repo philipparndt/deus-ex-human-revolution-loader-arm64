@@ -109,8 +109,11 @@ THUNK(CGGetOnlineDisplayList) {
 }
 
 // CGRect CGDisplayBounds(CGDirectDisplayID) -- hidden struct-return pointer at ARG(0).
+extern double cb_px; // carbon_event.m: HiDPI coordinate scale (1 = points)
+
 THUNK(CGDisplayBounds) {
     CGRect b = CGDisplayBounds(ARG(1));
+    b = CGRectMake(b.origin.x * cb_px, b.origin.y * cb_px, b.size.width * cb_px, b.size.height * cb_px);
     LOGD("cg: CGDisplayBounds(%u) = %g,%g %gx%g", ARG(1), b.origin.x, b.origin.y, b.size.width, b.size.height);
     RET_RECT(b);
 }
@@ -403,6 +406,7 @@ THUNK(CGDisplayRestoreColorSyncSettings) {
 
 THUNK(CGWarpMouseCursorPosition) {
     CGPoint p = ARGPOINT(0);
+    p = CGPointMake(p.x / cb_px, p.y / cb_px);
     LOGT("cg: warp cursor to %g,%g", p.x, p.y);
     if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
     else { RET(CGWarpMouseCursorPosition(p)); return; }
@@ -423,7 +427,8 @@ THUNK(CGDisplayHideCursor) { RET(CGDisplayHideCursor(ARG(0))); }
 THUNK(CGDisplayShowCursor) { RET(CGDisplayShowCursor(ARG(0))); }
 THUNK(CGDisplayMoveCursorToPoint) {
     if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
-    else { RET(CGDisplayMoveCursorToPoint(ARG(0), ARGPOINT(1))); return; }
+    CGPoint p = ARGPOINT(1);
+    RET(CGDisplayMoveCursorToPoint(ARG(0), CGPointMake(p.x / cb_px, p.y / cb_px)));
 }
 THUNK(CGGetLastMouseDelta) {
     int32_t dx = 0, dy = 0;
