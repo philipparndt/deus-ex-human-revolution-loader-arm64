@@ -302,8 +302,9 @@ static void fps_frame(uint64_t flush_ns) {
     in_flush += flush_ns;
     if (now - window_start >= (uint64_t)interval * 1000000000ull) {
         double secs = (now - window_start) / 1e9;
-        LOGI("fps: %.1f frames/s, worst %.1f ms, %u frames > 33 ms, %.1f ms/frame in flush", frames / secs,
-             worst / 1e6, slow, frames ? in_flush / 1e6 / frames : 0);
+        extern volatile int cb_app_active; // carbon_event.m: Feral throttles to ~9 fps in the background
+        LOGI("fps: %.1f frames/s, worst %.1f ms, %u frames > 33 ms, %.1f ms/frame in flush%s", frames / secs,
+             worst / 1e6, slow, frames ? in_flush / 1e6 / frames : 0, cb_app_active ? "" : " (in background)");
         window_start = now;
         frames = slow = 0;
         worst = in_flush = 0;

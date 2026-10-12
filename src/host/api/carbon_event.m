@@ -1424,16 +1424,20 @@ static void send_app_event(uint32_t kind) {
     [e release];
 }
 
+volatile int cb_app_active = 1; // for logging (gl_cgl.c fps statistics)
+
 static void app_notifications(void) {
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc addObserverForName:NSApplicationDidBecomeActiveNotification object:nil queue:nil
                 usingBlock:^(NSNotification *n) {
                   LOGD("carbon: app activated");
+                  cb_app_active = 1;
                   send_app_event(kEventAppActivated);
                 }];
     [nc addObserverForName:NSApplicationDidResignActiveNotification object:nil queue:nil
                 usingBlock:^(NSNotification *n) {
                   LOGD("carbon: app deactivated");
+                  cb_app_active = 0;
                   cb_keymap_clear();
                   send_app_event(kEventAppDeactivated);
                 }];
