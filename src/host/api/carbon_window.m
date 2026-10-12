@@ -137,7 +137,10 @@ static void apply_attrs(CBWindow *w) {
     if ([w->ns styleMask] != m) [w->ns setStyleMask:m];
     [w->ns setHasShadow:!(w->attrs & kWindowNoShadowAttribute)];
     [w->ns setIgnoresMouseEvents:(w->attrs & kWindowIgnoreClicksAttribute) != 0];
-    [w->ns setHidesOnDeactivate:(w->attrs & kWindowHideOnSuspendAttribute) != 0];
+    // Carbon hides floating windows while the app is in the background (Feral's
+    // fullscreen blanks other displays with one; left up, it swallowed all
+    // clicks on that display after switching apps).
+    [w->ns setHidesOnDeactivate:(w->attrs & kWindowHideOnSuspendAttribute) != 0 || w->wclass == kFloatingWindowClass];
 }
 
 CBView *cb_window_make_views(CBWindow *w); // carbon_view.m
