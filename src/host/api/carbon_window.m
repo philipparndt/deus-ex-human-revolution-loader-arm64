@@ -25,9 +25,25 @@ CBWindow *cb_window_for_ns(NSWindow *w) {
     return nil;
 }
 
+extern bool cb_bot; // carbon_event.m: autoplay (DXH_AUTOPLAY)
+
+// Autoplay runs the game in the background, where it never becomes key: its
+// largest visible document window stands in for the key window.
+static CBWindow *bot_window(void) {
+    CBWindow *w = nil;
+    for (NSWindow *nw in [NSApp windows]) {
+        CBWindow *c = cb_window_for_ns(nw);
+        if (!c || !nw.isVisible || c->wclass == kFloatingWindowClass || c->wclass == kUtilityWindowClass) continue;
+        if (!w || nw.frame.size.width * nw.frame.size.height > w->ns.frame.size.width * w->ns.frame.size.height)
+            w = c;
+    }
+    return w;
+}
+
 CBWindow *cb_key_window(void) {
     CBWindow *w = cb_window_for_ns([NSApp keyWindow]);
     if (!w) w = cb_window_for_ns([NSApp mainWindow]);
+    if (!w && cb_bot) w = bot_window();
     return w;
 }
 
@@ -49,7 +65,20 @@ static void send_window_event(CBWindow *w, uint32_t kind, void (^fill)(CBEvent *
     [e release];
 }
 
+static bool blanks_other_display(CBWindow *w);
+
 @implementation CBNSWindow
+// Every way onto the screen (orderFront, makeKeyAndOrderFront, AppKit showing
+// hidesOnDeactivate windows again on activation) ends up here.
+- (void)orderWindow:(NSWindowOrderingMode)place relativeTo:(NSInteger)other {
+    if (place != NSWindowOut && cb && blanks_other_display(cb)) {
+        if (!cb->blank_logged) LOGI("carbon: window %#x would blank another display, kept hidden", cb_handle(cb));
+        cb->blank_logged = true;
+        if (self.visible) [super orderWindow:NSWindowOut relativeTo:0];
+        return;
+    }
+    [super orderWindow:place relativeTo:other];
+}
 - (BOOL)canBecomeKeyWindow {
     return cb ? !(cb->attrs & kWindowNoActivatesAttribute) : YES;
 }
@@ -350,6 +379,24 @@ void cb_dump_windows(const char *why) {
     });
 }
 
+// Feral's fullscreen covers every other display with a floating black window
+// (it ignores its own BlankAllScreens preference). Keep such a window hidden so
+// the other displays stay usable; DXH_BLANK_SCREENS=1 shows it.
+static bool blanks_other_display(CBWindow *w) {
+    static int blank = -1;
+    if (blank < 0) blank = getenv("DXH_BLANK_SCREENS") != NULL;
+    if (blank || w->wclass != kFloatingWindowClass) return false;
+    NSRect c = [w->ns contentRectForFrameRect:w->ns.frame];
+    for (NSScreen *scr in NSScreen.screens) {
+        if (!NSContainsRect(c, scr.frame)) continue;
+        for (NSWindow *nw in NSApp.windows) {
+            CBWindow *cw = cb_window_for_ns(nw);
+            if (cw && cw->wclass == kDocumentWindowClass && nw.screen && nw.screen != scr) return true;
+        }
+    }
+    return false;
+}
+
 static void show(CBWindow *w) {
     send_window_event(w, kEventWindowShowing, nil);
     cb_on_main(^{
@@ -427,9 +474,11 @@ THUNK(IsWindowVisible) {
     CBWindow *w = WIN(0);
     RET(w && [w->ns isVisible]);
 }
+// Autoplay: the game runs in the background, but its visible windows count as
+// active so it accepts the bot's input.
 THUNK(IsWindowActive) {
     CBWindow *w = WIN(0);
-    RET(w && ([w->ns isKeyWindow] || [w->ns isMainWindow]));
+    RET(w && ([w->ns isKeyWindow] || [w->ns isMainWindow] || (cb_bot && [w->ns isVisible])));
 }
 THUNK(IsWindowCollapsed) {
     CBWindow *w = WIN(0);
@@ -494,6 +543,7 @@ THUNK(ActiveNonFloatingWindow) {
     cb_on_main(^{
       CBWindow *w = cb_window_for_ns([NSApp mainWindow]);
       if (!w) w = cb_window_for_ns([NSApp keyWindow]);
+      if (!w && cb_bot) w = bot_window();
       if (w && w->wclass != kFloatingWindowClass && w->wclass != kUtilityWindowClass) res = cb_handle(w);
     });
     RET(res);
@@ -720,11 +770,12 @@ THUNK(HIWindowFindAtLocation) {
     __block CBWindow *w = nil;
     cb_on_main(^{
       NSPoint np = cb_global_to_ns(p);
-      if (NSApp.isActive) {
+      if (NSApp.isActive || cb_bot) {
           // The game asks every frame (mouse handling); windowNumberAtPoint is a
           // synchronous WindowServer round trip of several ms. While active, our
           // windows are in front: hit-test them locally, key window first.
-          NSWindow *key = NSApp.keyWindow;
+          CBWindow *bw = cb_bot && !NSApp.keyWindow ? bot_window() : nil;
+          NSWindow *key = bw ? bw->ns : NSApp.keyWindow;
           if (key.isVisible && NSPointInRect(np, key.frame)) {
               w = cb_window_for_ns(key);
               if (w) return;

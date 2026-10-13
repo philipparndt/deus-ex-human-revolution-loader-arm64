@@ -404,10 +404,19 @@ THUNK(CGDisplayRestoreColorSyncSettings) {
 
 // --- cursor / events ----------------------------------------------------------------------------------
 
+extern bool cb_bot; // carbon_event.m: autoplay moves a virtual cursor
+extern CGPoint cb_bot_mouse;
+
 THUNK(CGWarpMouseCursorPosition) {
     CGPoint p = ARGPOINT(0);
     p = CGPointMake(p.x / cb_px, p.y / cb_px);
     LOGT("cg: warp cursor to %g,%g", p.x, p.y);
+    if (cb_bot) {
+        if (getenv("DXH_BOT_TRACE")) LOGI("bot-trace: warp to %.1f,%.1f (from %.1f,%.1f)", p.x, p.y, cb_bot_mouse.x, cb_bot_mouse.y);
+        cb_bot_mouse = p;
+        RET(kCGErrorSuccess);
+        return;
+    }
     if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
     else { RET(CGWarpMouseCursorPosition(p)); return; }
 }
@@ -426,13 +435,20 @@ THUNK(CGSetLocalEventsSuppressionInterval) { RET(CGSetLocalEventsSuppressionInte
 THUNK(CGDisplayHideCursor) { RET(CGDisplayHideCursor(ARG(0))); }
 THUNK(CGDisplayShowCursor) { RET(CGDisplayShowCursor(ARG(0))); }
 THUNK(CGDisplayMoveCursorToPoint) {
-    if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
     CGPoint p = ARGPOINT(1);
+    if (cb_bot) {
+        CGRect b = CGDisplayBounds(ARG(0));
+        cb_bot_mouse = CGPointMake(b.origin.x + p.x / cb_px, b.origin.y + p.y / cb_px);
+        RET(kCGErrorSuccess);
+        return;
+    }
+    if (env_flag("DXH_NO_MOUSE_GRAB")) { RET(kCGErrorSuccess); return; }
     RET(CGDisplayMoveCursorToPoint(ARG(0), CGPointMake(p.x / cb_px, p.y / cb_px)));
 }
 THUNK(CGGetLastMouseDelta) {
+    extern bool cb_bot_mouse_delta(int32_t *dx, int32_t *dy); // carbon_event.m: autoplay input
     int32_t dx = 0, dy = 0;
-    CGGetLastMouseDelta(&dx, &dy);
+    if (!cb_bot_mouse_delta(&dx, &dy)) CGGetLastMouseDelta(&dx, &dy);
     if (ARG(0)) gwrite32(ARG(0), (uint32_t)dx);
     if (ARG(1)) gwrite32(ARG(1), (uint32_t)dy);
 }

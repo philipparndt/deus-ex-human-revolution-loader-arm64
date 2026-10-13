@@ -12,6 +12,7 @@
 
 #include <IOKit/IOKitLib.h>
 #include <IOKit/hid/IOHIDLib.h>
+#include <mach/mach_time.h>
 #include <pthread.h>
 #include "ret_return.h"
 
@@ -477,7 +478,42 @@ static void hid_device_cb(void *context, IOReturn result, void *sender, IOHIDDev
     uint32_t a[4] = {c->ctx, (uint32_t)result, cfg(sender), cfg(device)};
     cpu_call(c->fn, 4, a);
 }
+static bool bot_delivering; // autoplay value being delivered (game thread)
+// autoplay: the HID manager with the game's value callback, where it is scheduled
+static IOHIDManagerRef bot_mgr;
+static struct ghid_cb *bot_cb;
+static CFRunLoopRef bot_rl;
+static pthread_mutex_t bot_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+    IOHIDManagerRef m;
+    CFRunLoopRef rl;
+} bot_sched[8]; // retained run loops of scheduled managers
+
+static IOHIDManagerRef bot_km; // the manager matching keyboards / mice (not retained: identity only)
+
+// Does a device matching dictionary ask for a keyboard or mouse?
+static bool matches_keyboard_mouse(CFDictionaryRef d) {
+    if (!d || CFGetTypeID(d) != CFDictionaryGetTypeID()) return false;
+    int32_t pg = 0, us = 0;
+    CFNumberRef n1 = CFDictionaryGetValue(d, CFSTR(kIOHIDDeviceUsagePageKey));
+    CFNumberRef n2 = CFDictionaryGetValue(d, CFSTR(kIOHIDDeviceUsageKey));
+    if (n1 && CFGetTypeID(n1) == CFNumberGetTypeID()) CFNumberGetValue(n1, kCFNumberSInt32Type, &pg);
+    if (n2 && CFGetTypeID(n2) == CFNumberGetTypeID()) CFNumberGetValue(n2, kCFNumberSInt32Type, &us);
+    return pg == kHIDPage_GenericDesktop && (us == kHIDUsage_GD_Keyboard || us == kHIDUsage_GD_Mouse);
+}
+
+static void bot_update(void) { // bot_lock held
+    CFRunLoopRef rl = NULL;
+    for (int i = 0; i < 8; i++)
+        if (bot_sched[i].m && bot_sched[i].m == bot_mgr) rl = bot_sched[i].rl;
+    if (rl) CFRetain(rl);
+    if (bot_rl) CFRelease(bot_rl);
+    bot_rl = rl;
+}
+
 static void hid_value_cb(void *context, IOReturn result, void *sender, IOHIDValueRef value) {
+    extern bool cb_bot; // carbon_event.m: autoplay has the controls
+    if (cb_bot && !bot_delivering) return;
     struct ghid_cb *c = context;
     uint32_t a[4] = {c->ctx, (uint32_t)result, cfg(sender), cfg(value)};
     cpu_call(c->fn, 4, a);
@@ -497,20 +533,54 @@ static struct ghid_cb *hid_cb(CFTypeRef owner, const void *key, gaddr_t fn, gadd
 
 THUNK(IOHIDManagerCreate) { RET_CF(IOHIDManagerCreate(gcf_allocator(ARG(0)), ARG(1))); }
 THUNK(IOHIDManagerGetTypeID) { RET(IOHIDManagerGetTypeID()); }
-THUNK(IOHIDManagerOpen) { RET(IOHIDManagerOpen((IOHIDManagerRef)ARGCF(0), ARG(1))); }
+THUNK(IOHIDManagerOpen) {
+    IOReturn rc = IOHIDManagerOpen((IOHIDManagerRef)ARGCF(0), ARG(1));
+    LOGI("iokit: IOHIDManagerOpen -> %#x", rc);
+    extern bool cb_bot; // carbon_event.m
+    if (rc && cb_bot && ARGCF(0) == bot_km) {
+        // No Input Monitoring permission (started in the background): the game
+        // would give up on keyboard/mouse; autoplay feeds this manager instead.
+        LOGI("iokit: autoplay: keyboard/mouse manager open reported as successful");
+        rc = kIOReturnSuccess;
+    }
+    RET(rc);
+}
 THUNK(IOHIDManagerClose) { RET(IOHIDManagerClose((IOHIDManagerRef)ARGCF(0), ARG(1))); }
 THUNK(IOHIDManagerSetDeviceMatching) {
     IOHIDManagerSetDeviceMatching((IOHIDManagerRef)ARGCF(0), (CFDictionaryRef)ARGCF(1));
+    if (matches_keyboard_mouse((CFDictionaryRef)ARGCF(1))) bot_km = (IOHIDManagerRef)ARGCF(0);
 }
 THUNK(IOHIDManagerSetDeviceMatchingMultiple) {
+    CFArrayRef ms = (CFArrayRef)ARGCF(1);
+    for (CFIndex i = 0; ms && i < CFArrayGetCount(ms); i++) {
+        log_matching("IOHIDManagerSetDeviceMatchingMultiple", CFArrayGetValueAtIndex(ms, i));
+        if (matches_keyboard_mouse(CFArrayGetValueAtIndex(ms, i))) bot_km = (IOHIDManagerRef)ARGCF(0);
+    }
     IOHIDManagerSetDeviceMatchingMultiple((IOHIDManagerRef)ARGCF(0), (CFArrayRef)ARGCF(1));
 }
 THUNK(IOHIDManagerCopyDevices) { RET_CF(IOHIDManagerCopyDevices((IOHIDManagerRef)ARGCF(0))); }
 THUNK(IOHIDManagerScheduleWithRunLoop) {
     IOHIDManagerScheduleWithRunLoop((IOHIDManagerRef)ARGCF(0), (CFRunLoopRef)ARGCF(1), ARGSTR(2));
+    pthread_mutex_lock(&bot_lock); // autoplay: where its HID values are delivered
+    for (int i = 0; i < 8; i++)
+        if (!bot_sched[i].m) {
+            bot_sched[i].m = (IOHIDManagerRef)CFRetain(ARGCF(0));
+            bot_sched[i].rl = (CFRunLoopRef)CFRetain(ARGCF(1));
+            break;
+        }
+    bot_update();
+    pthread_mutex_unlock(&bot_lock);
 }
 THUNK(IOHIDManagerUnscheduleFromRunLoop) {
     IOHIDManagerUnscheduleFromRunLoop((IOHIDManagerRef)ARGCF(0), (CFRunLoopRef)ARGCF(1), ARGSTR(2));
+    pthread_mutex_lock(&bot_lock);
+    for (int i = 0; i < 8; i++)
+        if (bot_sched[i].m == ARGCF(0) && bot_sched[i].rl == ARGCF(1)) {
+            CFRelease(bot_sched[i].m), CFRelease(bot_sched[i].rl);
+            bot_sched[i].m = NULL, bot_sched[i].rl = NULL;
+        }
+    bot_update();
+    pthread_mutex_unlock(&bot_lock);
 }
 THUNK(IOHIDManagerRegisterDeviceMatchingCallback) {
     IOHIDManagerRef m = (IOHIDManagerRef)ARGCF(0);
@@ -522,10 +592,139 @@ THUNK(IOHIDManagerRegisterDeviceRemovalCallback) {
     struct ghid_cb *c = hid_cb(m, &hid_remove_key, ARG(1), ARG(2));
     IOHIDManagerRegisterDeviceRemovalCallback(m, c ? hid_device_cb : NULL, c);
 }
+// The game reads in-game keyboard/mouse through this callback; autoplay
+// (autoplay.m) feeds it values too.
+
 THUNK(IOHIDManagerRegisterInputValueCallback) {
     IOHIDManagerRef m = (IOHIDManagerRef)ARGCF(0);
     struct ghid_cb *c = hid_cb(m, &hid_value_key, ARG(1), ARG(2));
     IOHIDManagerRegisterInputValueCallback(m, c ? hid_value_cb : NULL, c);
+    pthread_mutex_lock(&bot_lock);
+    if (c && bot_km && m != bot_km) {
+        // a gamepad manager: not where keyboard/mouse values belong
+    } else if (c) {
+        CFRetain(m);
+        if (bot_mgr) CFRelease(bot_mgr);
+        bot_mgr = m, bot_cb = c;
+    } else if (bot_mgr == m) {
+        CFRelease(bot_mgr);
+        bot_mgr = NULL, bot_cb = NULL;
+    }
+    bot_update();
+    pthread_mutex_unlock(&bot_lock);
+}
+
+// Without Input Monitoring permission (e.g. when started from a background
+// process) IOKit gives the devices no elements and IOHIDElementCreateWithDictionary
+// makes empty ones, so autoplay values and their elements are marked CF
+// dictionaries instead; the IOHIDValue / IOHIDElement thunks below answer for
+// them. The device is the real keyboard or mouse the game was told about.
+//   element: {dxbot, page, usage, cookie, device}   value: {dxbot, element, value, time}
+static bool bot_obj(CFTypeRef o) {
+    return o && CFGetTypeID(o) == CFDictionaryGetTypeID() && CFDictionaryContainsKey(o, CFSTR("dxbot"));
+}
+static int64_t bot_num(CFTypeRef o, CFStringRef key) {
+    CFNumberRef n = CFDictionaryGetValue(o, key);
+    int64_t v = 0;
+    if (n) CFNumberGetValue(n, kCFNumberSInt64Type, &v);
+    return v;
+}
+
+// The game's keyboard (generic desktop usage 6) or mouse (2), by primary usage:
+// IOHIDDeviceConformsTo needs the permission too.
+static IOHIDDeviceRef bot_device(IOHIDManagerRef m, uint32_t gd_usage) {
+    IOHIDDeviceRef dev = NULL;
+    CFSetRef devs = IOHIDManagerCopyDevices(m);
+    CFIndex count = devs ? CFSetGetCount(devs) : 0;
+    const void **d = malloc(sizeof *d * (count ? count : 1));
+    if (devs) CFSetGetValues(devs, d);
+    for (CFIndex i = 0; i < count && !dev; i++) {
+        int32_t pg = 0, us = 0;
+        CFNumberRef n1 = IOHIDDeviceGetProperty((IOHIDDeviceRef)d[i], CFSTR(kIOHIDPrimaryUsagePageKey));
+        CFNumberRef n2 = IOHIDDeviceGetProperty((IOHIDDeviceRef)d[i], CFSTR(kIOHIDPrimaryUsageKey));
+        if (n1) CFNumberGetValue(n1, kCFNumberSInt32Type, &pg);
+        if (n2) CFNumberGetValue(n2, kCFNumberSInt32Type, &us);
+        if (pg == kHIDPage_GenericDesktop && (uint32_t)us == gd_usage) dev = (IOHIDDeviceRef)d[i];
+    }
+    if (dev) CFRetain(dev);
+    free(d);
+    if (devs) CFRelease(devs);
+    return dev;
+}
+
+static CFDictionaryRef bot_element(IOHIDManagerRef m, uint32_t page, uint32_t usage) {
+    static struct {
+        uint32_t page, usage;
+        CFDictionaryRef el;
+    } cache[128];
+    static int n;
+    for (int i = 0; i < n; i++)
+        if (cache[i].page == page && cache[i].usage == usage) return cache[i].el;
+    IOHIDDeviceRef dev = bot_device(m, page == kHIDPage_KeyboardOrKeypad ? kHIDUsage_GD_Keyboard : kHIDUsage_GD_Mouse);
+    if (!dev || n == 128) {
+        LOGE("iokit: autoplay: no %s device for usage page %#x usage %#x",
+             page == kHIDPage_KeyboardOrKeypad ? "keyboard" : "mouse", page, usage);
+        return NULL; // not cached: devices may still appear
+    }
+    int64_t pg = page, us = usage, cookie = 0x7000 + n;
+    CFNumberRef np = CFNumberCreate(NULL, kCFNumberSInt64Type, &pg), nu = CFNumberCreate(NULL, kCFNumberSInt64Type, &us),
+                nc = CFNumberCreate(NULL, kCFNumberSInt64Type, &cookie);
+    const void *keys[] = {CFSTR("dxbot"), CFSTR("page"), CFSTR("usage"), CFSTR("cookie"), CFSTR("device")};
+    const void *vals[] = {kCFBooleanTrue, np, nu, nc, dev};
+    CFDictionaryRef el =
+        CFDictionaryCreate(NULL, keys, vals, 5, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFRelease(np), CFRelease(nu), CFRelease(nc), CFRelease(dev);
+    cache[n].page = page, cache[n].usage = usage, cache[n].el = el, n++;
+    return el;
+}
+
+// Autoplay: deliver a value for (usage page, usage) to the game's HID callback
+// on the run loop the manager is scheduled on. False if there is no callback yet.
+bool hid_bot_value(uint32_t page, uint32_t usage, int32_t value) {
+    pthread_mutex_lock(&bot_lock);
+    IOHIDManagerRef m = bot_mgr ? (IOHIDManagerRef)CFRetain(bot_mgr) : NULL;
+    CFRunLoopRef rl = bot_rl ? (CFRunLoopRef)CFRetain(bot_rl) : NULL;
+    pthread_mutex_unlock(&bot_lock);
+    CFDictionaryRef el = m && rl ? bot_element(m, page, usage) : NULL;
+    static int traced;
+    if (getenv("DXH_BOT_TRACE") && traced < 40) {
+        traced++;
+        LOGI("bot-trace: hid value page %#x usage %#x = %d: manager %p run loop %p element %p", page, usage, value, m,
+             rl, el);
+    }
+    if (!el) {
+        if (m) CFRelease(m);
+        if (rl) CFRelease(rl);
+        return false;
+    }
+    int64_t v64 = value, t64 = (int64_t)mach_absolute_time();
+    CFNumberRef nv = CFNumberCreate(NULL, kCFNumberSInt64Type, &v64), nt = CFNumberCreate(NULL, kCFNumberSInt64Type, &t64);
+    const void *keys[] = {CFSTR("dxbot"), CFSTR("element"), CFSTR("value"), CFSTR("time")};
+    const void *vals[] = {kCFBooleanTrue, el, nv, nt};
+    CFDictionaryRef v =
+        CFDictionaryCreate(NULL, keys, vals, 4, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFRelease(nv), CFRelease(nt);
+    CFRunLoopPerformBlock(rl, kCFRunLoopCommonModes, ^{
+      // on the game's thread: the callback is only replaced or removed here too
+      static int traced_cb;
+      if (getenv("DXH_BOT_TRACE") && traced_cb < 40) {
+          traced_cb++;
+          LOGI("bot-trace: hid callback on %p: manager %s, callback %p", CFRunLoopGetCurrent(),
+               bot_mgr == m ? "current" : "replaced", bot_cb);
+      }
+      if (bot_mgr == m && bot_cb) {
+          bot_delivering = true;
+          hid_value_cb(bot_cb, kIOReturnSuccess, m, (IOHIDValueRef)v);
+          bot_delivering = false;
+      }
+      CFRelease(v);
+      CFRelease(m);
+    });
+    CFRunLoopWakeUp(rl);
+    CFRelease(rl);
+    extern void cb_wake_main(void); // carbon_event.m: the game may be waiting for AppKit events
+    cb_wake_main();
+    return true;
 }
 
 THUNK(IOHIDDeviceGetTypeID) { RET(IOHIDDeviceGetTypeID()); }
@@ -539,7 +738,9 @@ THUNK(IOHIDDeviceUnscheduleFromRunLoop) {
     IOHIDDeviceUnscheduleFromRunLoop((IOHIDDeviceRef)ARGCF(0), (CFRunLoopRef)ARGCF(1), ARGSTR(2));
 }
 THUNK(IOHIDDeviceCopyMatchingElements) {
-    RET_CF(IOHIDDeviceCopyMatchingElements((IOHIDDeviceRef)ARGCF(0), (CFDictionaryRef)ARGCF(1), ARG(2)));
+    CFArrayRef els = IOHIDDeviceCopyMatchingElements((IOHIDDeviceRef)ARGCF(0), (CFDictionaryRef)ARGCF(1), ARG(2));
+    LOGI("iokit: IOHIDDeviceCopyMatchingElements(%p) -> %ld elements", ARGCF(0), els ? (long)CFArrayGetCount(els) : -1L);
+    RET_CF(els);
 }
 THUNK(IOHIDDeviceConformsTo) { RET_BOOL(IOHIDDeviceConformsTo((IOHIDDeviceRef)ARGCF(0), ARG(1), ARG(2))); }
 THUNK(IOHIDDeviceGetService) { RET(IOHIDDeviceGetService((IOHIDDeviceRef)ARGCF(0))); }
@@ -551,22 +752,70 @@ THUNK(IOHIDDeviceGetValue) {
     RET(rc);
 }
 
+#define BOT(i) bot_obj(ARGCF(i)) // autoplay element / value (see bot_element)
 THUNK(IOHIDElementGetTypeID) { RET(IOHIDElementGetTypeID()); }
-THUNK(IOHIDElementGetCookie) { RET(IOHIDElementGetCookie((IOHIDElementRef)ARGCF(0))); }
-THUNK(IOHIDElementGetDevice) { RET_CF(IOHIDElementGetDevice((IOHIDElementRef)ARGCF(0))); }
-THUNK(IOHIDElementGetUsage) { RET(IOHIDElementGetUsage((IOHIDElementRef)ARGCF(0))); }
-THUNK(IOHIDElementGetUsagePage) { RET(IOHIDElementGetUsagePage((IOHIDElementRef)ARGCF(0))); }
-THUNK(IOHIDElementGetType) { RET(IOHIDElementGetType((IOHIDElementRef)ARGCF(0))); }
-THUNK(IOHIDElementGetLogicalMin) { RET((uint32_t)IOHIDElementGetLogicalMin((IOHIDElementRef)ARGCF(0))); }
-THUNK(IOHIDElementGetLogicalMax) { RET((uint32_t)IOHIDElementGetLogicalMax((IOHIDElementRef)ARGCF(0))); }
-THUNK(IOHIDElementGetParent) { RET_CF(IOHIDElementGetParent((IOHIDElementRef)ARGCF(0))); }
-THUNK(IOHIDElementGetChildren) { RET_CF(IOHIDElementGetChildren((IOHIDElementRef)ARGCF(0))); }
-THUNK(IOHIDElementGetProperty) { RET_CF(IOHIDElementGetProperty((IOHIDElementRef)ARGCF(0), ARGSTR(1))); }
+THUNK(IOHIDElementGetCookie) {
+    if (BOT(0)) RET((uint32_t)bot_num(ARGCF(0), CFSTR("cookie")));
+    else RET(IOHIDElementGetCookie((IOHIDElementRef)ARGCF(0)));
+}
+THUNK(IOHIDElementGetDevice) {
+    if (BOT(0)) RET_CF(CFDictionaryGetValue(ARGCF(0), CFSTR("device")));
+    else RET_CF(IOHIDElementGetDevice((IOHIDElementRef)ARGCF(0)));
+}
+THUNK(IOHIDElementGetUsage) {
+    if (BOT(0)) RET((uint32_t)bot_num(ARGCF(0), CFSTR("usage")));
+    else RET(IOHIDElementGetUsage((IOHIDElementRef)ARGCF(0)));
+}
+THUNK(IOHIDElementGetUsagePage) {
+    if (BOT(0)) RET((uint32_t)bot_num(ARGCF(0), CFSTR("page")));
+    else RET(IOHIDElementGetUsagePage((IOHIDElementRef)ARGCF(0)));
+}
+THUNK(IOHIDElementGetType) {
+    if (BOT(0))
+        RET(bot_num(ARGCF(0), CFSTR("page")) == kHIDPage_GenericDesktop ? kIOHIDElementTypeInput_Misc
+                                                                        : kIOHIDElementTypeInput_Button);
+    else RET(IOHIDElementGetType((IOHIDElementRef)ARGCF(0)));
+}
+THUNK(IOHIDElementGetLogicalMin) {
+    if (BOT(0)) RET(bot_num(ARGCF(0), CFSTR("page")) == kHIDPage_GenericDesktop ? (uint32_t)-127 : 0);
+    else RET((uint32_t)IOHIDElementGetLogicalMin((IOHIDElementRef)ARGCF(0)));
+}
+THUNK(IOHIDElementGetLogicalMax) {
+    if (BOT(0)) RET(bot_num(ARGCF(0), CFSTR("page")) == kHIDPage_GenericDesktop ? 127 : 1);
+    else RET((uint32_t)IOHIDElementGetLogicalMax((IOHIDElementRef)ARGCF(0)));
+}
+THUNK(IOHIDElementGetParent) {
+    if (BOT(0)) RET_CF(NULL);
+    else RET_CF(IOHIDElementGetParent((IOHIDElementRef)ARGCF(0)));
+}
+THUNK(IOHIDElementGetChildren) {
+    if (BOT(0)) RET_CF(NULL);
+    else RET_CF(IOHIDElementGetChildren((IOHIDElementRef)ARGCF(0)));
+}
+THUNK(IOHIDElementGetProperty) {
+    if (BOT(0)) RET_CF(NULL);
+    else RET_CF(IOHIDElementGetProperty((IOHIDElementRef)ARGCF(0), ARGSTR(1)));
+}
 
 THUNK(IOHIDValueGetTypeID) { RET(IOHIDValueGetTypeID()); }
-THUNK(IOHIDValueGetElement) { RET_CF(IOHIDValueGetElement((IOHIDValueRef)ARGCF(0))); }
-THUNK(IOHIDValueGetIntegerValue) { RET((uint32_t)IOHIDValueGetIntegerValue((IOHIDValueRef)ARGCF(0))); }
-THUNK(IOHIDValueGetTimeStamp) { RET64(IOHIDValueGetTimeStamp((IOHIDValueRef)ARGCF(0))); }
-THUNK(IOHIDValueGetLength) { RET(IOHIDValueGetLength((IOHIDValueRef)ARGCF(0))); }
+THUNK(IOHIDValueGetElement) {
+    if (BOT(0)) RET_CF(CFDictionaryGetValue(ARGCF(0), CFSTR("element")));
+    else RET_CF(IOHIDValueGetElement((IOHIDValueRef)ARGCF(0)));
+}
+THUNK(IOHIDValueGetIntegerValue) {
+    if (BOT(0)) RET((uint32_t)bot_num(ARGCF(0), CFSTR("value")));
+    else RET((uint32_t)IOHIDValueGetIntegerValue((IOHIDValueRef)ARGCF(0)));
+}
+THUNK(IOHIDValueGetTimeStamp) {
+    if (BOT(0)) RET64((uint64_t)bot_num(ARGCF(0), CFSTR("time")));
+    else RET64(IOHIDValueGetTimeStamp((IOHIDValueRef)ARGCF(0)));
+}
+THUNK(IOHIDValueGetLength) {
+    if (BOT(0)) RET(4);
+    else RET(IOHIDValueGetLength((IOHIDValueRef)ARGCF(0)));
+}
 // double IOHIDValueGetScaledValue(value, IOHIDValueScaleType)
-THUNK(IOHIDValueGetScaledValue) { RETD(IOHIDValueGetScaledValue((IOHIDValueRef)ARGCF(0), ARG(1))); }
+THUNK(IOHIDValueGetScaledValue) {
+    if (BOT(0)) RETD((double)bot_num(ARGCF(0), CFSTR("value")));
+    else RETD(IOHIDValueGetScaledValue((IOHIDValueRef)ARGCF(0), ARG(1)));
+}

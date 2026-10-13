@@ -138,6 +138,8 @@ void cb_app_init(void) {
         if (nsapp) gwrite32(nsapp, o2g(NSApp));
     }
     LOGI("carbon: application initialised");
+    extern void autoplay_start(void);
+    autoplay_start(); // DXH_AUTOPLAY
 }
 
 // --- targets & handlers ---------------------------------------------------------------------------
@@ -753,9 +755,60 @@ uint32_t cb_modifiers_from_ns(NSEventModifierFlags f) {
     return m;
 }
 
+// --- synthetic input (autoplay.m, DXH_AUTOPLAY) ---------------------------------------------------------
+// While the bot drives the game, the modifier/button/cursor state comes from it
+// and real input events are ignored.
+
+bool cb_bot;
+NSEventModifierFlags cb_bot_flags;
+NSUInteger cb_bot_buttons;
+CGPoint cb_bot_mouse; // global, logical
+static float bot_dx, bot_dy; // relative motion since the last CGGetLastMouseDelta
+static NSEvent *injecting;   // event being translated by cb_bot_inject
+static float inject_dx, inject_dy;
+
+static NSEventModifierFlags mod_flags(void) { return cb_bot ? cb_bot_flags : [NSEvent modifierFlags]; }
+static NSUInteger mouse_buttons(void) { return cb_bot ? cb_bot_buttons : [NSEvent pressedMouseButtons]; }
+static CGPoint mouse_global(void) { return cb_bot ? cb_bot_mouse : cb_ns_to_global([NSEvent mouseLocation]); }
+
+static bool translate(NSEvent *e);
+static void wake_main(void);
+
+// Main thread: feed a synthetic AppKit event through the normal translation.
+void cb_bot_inject(NSEvent *e, float dx, float dy) {
+    injecting = e;
+    inject_dx = dx, inject_dy = dy;
+    bot_dx += dx, bot_dy += dy;
+    if (!translate(e)) [NSApp sendEvent:e];
+    injecting = nil;
+    wake_main();
+}
+
+bool cb_bot_mouse_delta(int32_t *dx, int32_t *dy) {
+    if (!cb_bot) return false;
+    __block float x, y;
+    cb_on_main(^{
+      x = bot_dx, y = bot_dy;
+      bot_dx = bot_dy = 0;
+    });
+    *dx = (int32_t)lroundf(x), *dy = (int32_t)lroundf(y);
+    return true;
+}
+
+static bool is_input(NSEventType t) {
+    switch (t) {
+    case NSEventTypeKeyDown: case NSEventTypeKeyUp: case NSEventTypeFlagsChanged: case NSEventTypeLeftMouseDown:
+    case NSEventTypeRightMouseDown: case NSEventTypeOtherMouseDown: case NSEventTypeLeftMouseUp:
+    case NSEventTypeRightMouseUp: case NSEventTypeOtherMouseUp: case NSEventTypeMouseMoved:
+    case NSEventTypeLeftMouseDragged: case NSEventTypeRightMouseDragged: case NSEventTypeOtherMouseDragged:
+    case NSEventTypeScrollWheel: return true;
+    default: return false;
+    }
+}
+
 uint32_t cb_current_modifiers(void) {
-    uint32_t m = cb_modifiers_from_ns([NSEvent modifierFlags]);
-    if ([NSEvent pressedMouseButtons] & 1) m |= btnState;
+    uint32_t m = cb_modifiers_from_ns(mod_flags());
+    if (mouse_buttons() & 1) m |= btnState;
     return m;
 }
 
@@ -782,7 +835,7 @@ void cb_keymap_clear(void) { memset(keymap, 0, sizeof keymap); }
 
 THUNK(GetKeys) {
     if (!ARG(0)) return;
-    keymap_update_modifiers([NSEvent modifierFlags]);
+    keymap_update_modifiers(mod_flags());
     memcpy(g2h(ARG(0)), keymap, 16);
 }
 THUNK(GetCurrentKeyModifiers) { RET(cb_current_modifiers() & ~(uint32_t)btnState); }
@@ -865,6 +918,7 @@ static void set_key_params(CBEvent *c, NSEvent *e) {
 }
 
 static CGPoint ns_event_global(NSEvent *e) {
+    if (e == injecting) return cb_bot_mouse;
     NSPoint p = [e locationInWindow];
     if ([e window]) p = [[e window] convertPointToScreen:p];
     return cb_ns_to_global(p);
@@ -894,8 +948,8 @@ static void set_mouse_params(CBEvent *c, NSEvent *e) {
     case NSEventTypeOtherMouseDragged: case NSEventTypeLeftMouseDown: case NSEventTypeRightMouseDown:
     case NSEventTypeOtherMouseDown: case NSEventTypeLeftMouseUp: case NSEventTypeRightMouseUp:
     case NSEventTypeOtherMouseUp:
-        dx = (float)[e deltaX];
-        dy = (float)[e deltaY];
+        dx = e == injecting ? inject_dx : (float)[e deltaX];
+        dy = e == injecting ? inject_dy : (float)[e deltaY];
         break;
     default: break;
     }
@@ -905,7 +959,7 @@ static void set_mouse_params(CBEvent *c, NSEvent *e) {
         [e type] == NSEventTypeLeftMouseDragged)
         button = 1;
     cb_event_set_u16(c, kEventParamMouseButton, typeMouseButton, button);
-    cb_event_set_u32(c, kEventParamMouseChord, typeUInt32, (uint32_t)[NSEvent pressedMouseButtons]);
+    cb_event_set_u32(c, kEventParamMouseChord, typeUInt32, (uint32_t)mouse_buttons());
     NSEventType t = [e type];
     if (t != NSEventTypeMouseMoved && t != NSEventTypeScrollWheel)
         cb_event_set_u32(c, kEventParamClickCount, typeUInt32, (uint32_t)[e clickCount]);
@@ -1108,6 +1162,7 @@ static void pump(double remaining) {
             atomic_store(&wake_pending, false);
             return;
         }
+        if (cb_bot && is_input([e type])) return; // the bot has the controls
         if (!translate(e)) [NSApp sendEvent:e];
     }
 }
@@ -1285,6 +1340,16 @@ void cb_quit_app_loop(void) {
     atomic_store(&app_quit, true);
     wake_main();
 }
+
+// CFRunLoopStop on the main run loop (cf_runloop.c). The innermost Carbon loop on
+// the main thread returns as if its event loop were quit: HR's game thread, when
+// it ends, stops the main run loop every 10 ms until RunApplicationEventLoop has
+// returned; our loops run their own pumps, so a plain CFRunLoopStop only ended
+// one pump and the game never quit.
+void cb_stop_main_loop(void) {
+    atomic_store(&cb_main_loop()->quit, true);
+    wake_main();
+}
 THUNK(QuitApplicationEventLoop) {
     LOGI("carbon: QuitApplicationEventLoop");
     cb_quit_app_loop();
@@ -1453,6 +1518,7 @@ static void app_notifications(void) {
                 }];
     [nc addObserverForName:NSApplicationDidResignActiveNotification object:nil queue:nil
                 usingBlock:^(NSNotification *n) {
+                  if (cb_bot) return; // keep running at full speed with the bot's input
                   LOGD("carbon: app deactivated");
                   cb_app_active = 0;
                   cb_keymap_clear();
@@ -1472,7 +1538,7 @@ static void app_notifications(void) {
 
 // HIGetMousePosition(HICoordinateSpace, void *object, HIPoint *out) -> HIPoint *
 THUNK(HIGetMousePosition) {
-    CGPoint g = cb_ns_to_global([NSEvent mouseLocation]);
+    CGPoint g = mouse_global();
     uint32_t space = ARG(0);
     if (space == kHICoordSpaceWindow) {
         CBWindow *w = CB_UNWRAP(CBWindow, ARG(1));
@@ -1492,6 +1558,7 @@ THUNK(HIGetMousePosition) {
         gwritef(ARG(2), g.x);
         gwritef(ARG(2) + 4, g.y);
     }
+    if (cb_bot && getenv("DXH_BOT_TRACE")) LOGI("bot-trace: HIGetMousePosition(space %u) -> %.1f,%.1f", space, g.x, g.y);
     RET(ARG(2));
 }
 
@@ -1522,7 +1589,7 @@ THUNK(TrackMouseLocationWithOptions) {
         }
         [e release];
     }
-    CGPoint g = cb_ns_to_global([NSEvent mouseLocation]);
+    CGPoint g = mouse_global();
     CBWindow *w = nil;
     if (ARG(0)) cb_port_window(ARG(0), &w);
     if (w) {

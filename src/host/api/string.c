@@ -224,15 +224,89 @@ THUNK(ispunct) { RET(ispunct(ARGI(0))); }
 THUNK(isxdigit) { RET(isxdigit(ARGI(0))); }
 
 // --- sorting / searching / random ------------------------------------------------------------
-static _Thread_local gaddr_t qsort_cmp;
-static int qsort_tramp(const void *a, const void *b) {
-    return (int32_t)gcall2(qsort_cmp, h2g(a), h2g(b));
+// The guest comparator may only see pointers into the guest's array: libc's
+// qsort falls back to heapsort, which compares against an element copied to a
+// host malloc buffer (outside guest memory). So: an in-place introsort that
+// only swaps (quicksort, heapsort below a depth limit, insertion sort for
+// short runs).
+struct gsort {
+    uint8_t *base; // host view of the array
+    gaddr_t gbase;
+    uint32_t size;
+    gaddr_t cmp;
+};
+static int gs_cmp(struct gsort *s, uint32_t i, uint32_t j) {
+    return (int32_t)gcall2(s->cmp, s->gbase + i * s->size, s->gbase + j * s->size);
+}
+static void gs_swap(struct gsort *s, uint32_t i, uint32_t j) {
+    if (i == j) return;
+    uint8_t *a = s->base + (size_t)i * s->size, *b = s->base + (size_t)j * s->size;
+    for (uint32_t k = 0; k < s->size; k++) {
+        uint8_t t = a[k];
+        a[k] = b[k];
+        b[k] = t;
+    }
+}
+static void gs_insertion(struct gsort *s, uint32_t lo, uint32_t hi) { // [lo, hi)
+    for (uint32_t i = lo + 1; i < hi; i++)
+        for (uint32_t j = i; j > lo && gs_cmp(s, j - 1, j) > 0; j--) gs_swap(s, j - 1, j);
+}
+static void gs_sift(struct gsort *s, uint32_t lo, uint32_t root, uint32_t n) {
+    for (;;) {
+        uint32_t c = 2 * root + 1;
+        if (c >= n) return;
+        if (c + 1 < n && gs_cmp(s, lo + c, lo + c + 1) < 0) c++;
+        if (gs_cmp(s, lo + root, lo + c) >= 0) return;
+        gs_swap(s, lo + root, lo + c);
+        root = c;
+    }
+}
+static void gs_heapsort(struct gsort *s, uint32_t lo, uint32_t hi) {
+    uint32_t n = hi - lo;
+    for (uint32_t i = n / 2; i-- > 0;) gs_sift(s, lo, i, n);
+    for (uint32_t end = n; end-- > 1;) {
+        gs_swap(s, lo, lo + end);
+        gs_sift(s, lo, 0, end);
+    }
+}
+static void gs_intro(struct gsort *s, uint32_t lo, uint32_t hi, int depth) {
+    while (hi - lo > 16) {
+        if (depth-- == 0) {
+            gs_heapsort(s, lo, hi);
+            return;
+        }
+        // median of three to lo, then Lomuto-free Hoare partition around it
+        uint32_t mid = lo + (hi - lo) / 2, last = hi - 1;
+        if (gs_cmp(s, mid, lo) < 0) gs_swap(s, mid, lo);
+        if (gs_cmp(s, last, lo) < 0) gs_swap(s, last, lo);
+        if (gs_cmp(s, last, mid) < 0) gs_swap(s, last, mid);
+        gs_swap(s, lo, mid); // pivot at lo
+        uint32_t i = lo + 1, j = last;
+        for (;;) {
+            while (i <= j && gs_cmp(s, i, lo) < 0) i++;
+            while (j > lo && gs_cmp(s, j, lo) > 0) j--;
+            if (i >= j) break;
+            gs_swap(s, i++, j--);
+        }
+        gs_swap(s, lo, j); // pivot to its place
+        // recurse into the smaller side, loop on the larger
+        if (j - lo < hi - (j + 1)) {
+            gs_intro(s, lo, j, depth);
+            lo = j + 1;
+        } else {
+            gs_intro(s, j + 1, hi, depth);
+            hi = j;
+        }
+    }
+    gs_insertion(s, lo, hi);
 }
 THUNK(qsort) {
-    gaddr_t prev = qsort_cmp;
-    qsort_cmp = ARG(3);
-    qsort(ARGP(0), ARG(1), ARG(2), qsort_tramp);
-    qsort_cmp = prev;
+    uint32_t n = ARG(1), size = ARG(2);
+    if (n < 2 || !size) return;
+    struct gsort s = {ARGP(0), ARG(0), size, ARG(3)};
+    int depth = 0;
+    for (uint32_t k = n; k; k >>= 1) depth += 2;
+    gs_intro(&s, 0, n, depth);
 }
 static _Thread_local gaddr_t bsearch_cmp;
 static int bsearch_tramp(const void *a, const void *b) { return (int32_t)gcall2(bsearch_cmp, h2g(a), h2g(b)); }

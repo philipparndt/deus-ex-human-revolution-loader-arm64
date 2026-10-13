@@ -1,0 +1,17 @@
+# Load test: launcher -> "Continue" -> wait for the level -> a little play -> quit.
+wait 15
+key return
+wait 50
+key return
+wait 10
+key return
+wait 10
+key return
+wait 100
+shot loaded
+look 800 0 1
+key w 2
+shot moved
+wander 30
+shot wander
+quit

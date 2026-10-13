@@ -5,7 +5,7 @@
 // Each round uses fresh cache lines; both threads start a round together.
 // LITMUS_ROUNDS (default 200000) rounds per test. Prints the counts; with
 // LITMUS_STRICT=1 the exit code is 1 if a forbidden outcome was seen (the native
-// JIT shows MP violations unless DXCPU_TSO=1).
+// JIT shows MP violations with DXCPU_TSO=0).
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>

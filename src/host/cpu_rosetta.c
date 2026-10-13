@@ -178,5 +178,6 @@ bool cpu_crash_regs(uint32_t *eip, uint32_t *esp, uint32_t *ebp, uint32_t regs[8
 }
 
 void cpu_main_heartbeat(void) {} // watchdog: native backend only
+void cpu_dump_guest_threads(void) {}
 
 void cpu_code_changed(gaddr_t addr, uint32_t len) { (void)addr; (void)len; }

@@ -1,0 +1,22 @@
+# Input check: load, then leave cover, look around and walk (screenshots between).
+wait 15
+key return
+wait 50
+key return
+wait 10
+key return
+wait 10
+key return
+wait 100
+shot loaded
+key space 1
+shot uncover
+look 1500 0 1.5
+shot looked
+key w 3
+shot walked
+key a 2
+key s 2
+look 0 300 1
+shot looked-down
+quit

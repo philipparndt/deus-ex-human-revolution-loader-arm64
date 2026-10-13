@@ -1,0 +1,16 @@
+# Launcher -> "Continue" (latest save) -> random play until the run's time limit.
+wait 15
+key return
+wait 50
+key return
+wait 10
+key return
+wait 10
+key return
+wait 100
+shot loaded
+key space 1
+repeat 0
+wander 120
+shot wander
+end

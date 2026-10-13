@@ -10,15 +10,28 @@ pub static UNDO_ON: AtomicBool = AtomicBool::new(false);
 /// x86 TSO ordering for interpreted accesses (see jit::tso_on).
 pub static TSO: AtomicBool = AtomicBool::new(false);
 
+// As in translated code: dmb ishld after loads (orders them before later loads
+// and stores), dmb ishst before stores. A Rust release fence would be a full
+// dmb ish on every store.
 #[inline(always)]
 fn tso_load() {
     if TSO.load(Ordering::Relaxed) {
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            std::arch::asm!("dmb ishld", options(nostack, preserves_flags))
+        };
+        #[cfg(not(target_arch = "aarch64"))]
         std::sync::atomic::fence(Ordering::Acquire);
     }
 }
 #[inline(always)]
 fn tso_store() {
     if TSO.load(Ordering::Relaxed) {
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            std::arch::asm!("dmb ishst", options(nostack, preserves_flags))
+        };
+        #[cfg(not(target_arch = "aarch64"))]
         std::sync::atomic::fence(Ordering::Release);
     }
 }

@@ -1,0 +1,18 @@
+# Quit check: launcher -> main menu -> click "Spiel beenden" (last entry) -> click "Annehmen".
+# The run's result says whether the process ends by itself (ok / exit-N) or hangs (timeout).
+wait 15
+key return
+wait 60
+cursor 0.44 0.773
+wait 1
+shot quit-hover
+click left
+wait 3
+shot confirm
+cursor 0.45 0.547
+wait 1
+click left
+wait 5
+shot after-confirm
+wait 60
+shot still-running

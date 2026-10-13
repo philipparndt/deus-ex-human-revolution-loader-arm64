@@ -44,6 +44,8 @@ const T2: u32 = 2;
 const T3: u32 = 3;
 const T4: u32 = 4; // effective address
 const T5: u32 = 5;
+const TA: u32 = 17; // host address for ldapr/stlr (DXCPU_TSO)
+const TD: u32 = 16; // vector data for ldapr/stlr (only a call target elsewhere)
 // Lazy flag operands within a block.
 const FA: u32 = 9;
 const FB: u32 = 10;
@@ -280,17 +282,37 @@ pub fn code_changed(addr: u32, len: u32) -> bool {
     hit
 }
 
-/// DXCPU_TSO=1: x86 store ordering for guest memory. ARM may reorder plain
-/// loads and stores; x86 only lets a later load pass an earlier store. Loads get
+/// x86 store ordering for guest memory (on by default, DXCPU_TSO=0 turns it
+/// off). Without it HR crashes in its job system about every other level load
+/// (lock-free lists published with plain stores; measured with the autoplay
+/// bot: 4 crashes in 8 loads without, 0 in 8 with, at ~11% lower frame rate).
+/// ARM may reorder plain loads and stores; x86 only lets a later load pass an
+/// earlier store. Loads get
 /// dmb ishld after them, stores dmb ishst before them (ESP-based accesses
 /// excepted), the interpreter fences likewise (mem.rs). litmus.c shows the
 /// difference (message passing).
+/// DXCPU_TSO=rcpc: loads as ldapr, stores as stlr instead (RCpc acquire /
+/// release is exactly TSO; vector data goes through x16). Measured on M-series:
+/// no faster than the barriers (bench.c float part slower), kept for comparison.
 pub fn tso_on() -> bool {
+    tso_mode() != 0
+}
+/// DXCPU_TSO_EBP=0: [ebp - x] accesses keep their barriers too.
+fn tso_ebp_local() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        let on = std::env::var("DXCPU_TSO").map(|v| v != "0").unwrap_or(false);
-        mem::TSO.store(on, std::sync::atomic::Ordering::Relaxed);
-        on
+    *ON.get_or_init(|| std::env::var("DXCPU_TSO_EBP").map(|v| v != "0").unwrap_or(true))
+}
+/// 0 = off, 1 = ldapr/stlr (DXCPU_TSO=rcpc), 2 = dmb barriers
+pub fn tso_mode() -> u8 {
+    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        let mode = match std::env::var("DXCPU_TSO").as_deref() {
+            Ok("0") => 0,
+            Ok("rcpc") => 1,
+            _ => 2,
+        };
+        mem::TSO.store(mode != 0, std::sync::atomic::Ordering::Relaxed);
+        mode
     })
 }
 
@@ -994,6 +1016,71 @@ impl Translator {
         }
     }
 
+    /// Integer load of guest memory [BASE + wm] into rd (TSO aware).
+    fn gld(&mut self, size: u32, rd: u32, wm: u32) {
+        if self.tso && !self.ea_stack && tso_mode() == 1 {
+            self.a.add_x_uxtw(TA, BASE, wm);
+            self.a.ldapr(size, rd, TA);
+        } else {
+            self.a.ldr_uxtw(size, rd, BASE, wm);
+            self.tso_after_load();
+        }
+    }
+    /// Integer store of rs to guest memory [BASE + wm] (TSO aware).
+    fn gst(&mut self, size: u32, rs: u32, wm: u32) {
+        if self.tso && !self.ea_stack && tso_mode() == 1 {
+            self.a.add_x_uxtw(TA, BASE, wm);
+            self.a.stlr(size, rs, TA);
+        } else {
+            self.tso_before_store();
+            self.a.str_uxtw(size, rs, BASE, wm);
+        }
+    }
+
+    /// SIMD load of guest memory [BASE + wm] (size 2 = S, 3 = D, 4 = Q), TSO
+    /// aware: ldapr has no vector form, so the data goes through TD.
+    fn vld(&mut self, size: u32, vt: u32, wm: u32) {
+        if !(self.tso && !self.ea_stack && tso_mode() == 1) {
+            self.a.ldr_v_uxtw(size, vt, BASE, wm);
+            self.tso_after_load();
+            return;
+        }
+        self.a.add_x_uxtw(TA, BASE, wm);
+        if size == 2 {
+            self.a.ldapr(2, TD, TA);
+            self.a.fmov_s_w(vt, TD);
+            return;
+        }
+        self.a.ldapr(3, TD, TA);
+        self.a.fmov_d_x(vt, TD);
+        if size == 4 {
+            self.a.add_x_imm(TA, TA, 8);
+            self.a.ldapr(3, TD, TA);
+            self.a.ins_gen(3, vt, 1, TD);
+        }
+    }
+    /// SIMD store to guest memory [BASE + wm], TSO aware (see vld).
+    fn vst(&mut self, size: u32, vs: u32, wm: u32) {
+        if !(self.tso && !self.ea_stack && tso_mode() == 1) {
+            self.tso_before_store();
+            self.a.str_v_uxtw(size, vs, BASE, wm);
+            return;
+        }
+        self.a.add_x_uxtw(TA, BASE, wm);
+        if size == 2 {
+            self.a.fmov_w_s(TD, vs);
+            self.a.stlr(2, TD, TA);
+            return;
+        }
+        self.a.fmov_x_d(TD, vs);
+        self.a.stlr(3, TD, TA);
+        if size == 4 {
+            self.a.umov_x_d(TD, vs, 1);
+            self.a.add_x_imm(TA, TA, 8);
+            self.a.stlr(3, TD, TA);
+        }
+    }
+
     fn tso_after_load(&mut self) {
         if self.tso && !self.ea_stack {
             self.a.dmb_ishld();
@@ -1148,8 +1235,7 @@ impl Translator {
         let mut cold: Vec<Fixup> = Vec::new();
         match m {
             Fld if mem && msize == MemorySize::Float32 => {
-                self.a.ldr_uxtw(2, T0, BASE, T4);
-                self.tso_after_load();
+                self.gld(2, T0, T4);
                 // SNaN (quiet bit clear) sets IE; fcvt quiets and keeps sign and payload.
                 self.a.lsl_w_imm(T2, T0, 1);
                 self.a.mov_w_imm(T3, 0xff00_0000);
@@ -1165,8 +1251,7 @@ impl Translator {
                 self.x87_push(V0);
             }
             Fld if mem => {
-                self.a.ldr_uxtw(3, T0, BASE, T4);
-                self.tso_after_load();
+                self.gld(3, T0, T4);
                 self.a.fmov_d_x(V0, T0);
                 self.x87_quiet_f64(V0);
                 self.x87_push(V0);
@@ -1188,13 +1273,11 @@ impl Translator {
                         self.a.scvtf_s_w(true, V0, T0);
                     }
                     MemorySize::Int32 => {
-                        self.a.ldr_uxtw(2, T0, BASE, T4);
-                        self.tso_after_load();
+                        self.gld(2, T0, T4);
                         self.a.scvtf_s_w(true, V0, T0);
                     }
                     _ => {
-                        self.a.ldr_uxtw(3, T0, BASE, T4);
-                        self.tso_after_load();
+                        self.gld(3, T0, T4);
                         self.a.scvtf_d_x(V0, T0);
                     }
                 }
@@ -1216,8 +1299,7 @@ impl Translator {
                 self.a.bind(quiet);
                 self.a.bind(not_nan);
                 self.a.fcvt_s_d(V1, V0);
-                self.tso_before_store();
-                self.a.str_v_uxtw(2, V1, BASE, T4);
+                self.vst(2, V1, T4);
                 if m == Fstp {
                     self.x87_pop();
                 }
@@ -1226,8 +1308,7 @@ impl Translator {
                 self.x87_get(V0, 0);
                 self.a.fmov_x_d(T0, V0);
                 self.x87_quiet_f64(V0);
-                self.tso_before_store();
-                self.a.str_v_uxtw(3, V0, BASE, T4);
+                self.vst(3, V0, T4);
                 if m == Fstp {
                     self.x87_pop();
                 }
@@ -1273,11 +1354,9 @@ impl Translator {
                     self.a.sxth_w(T3, T0);
                     self.a.cmp_w(T3, T0);
                     cold.push(self.a.bcond_fixup(Cond::Ne));
-                    self.tso_before_store();
-                    self.a.str_uxtw(1, T0, BASE, T4);
+                    self.gst(1, T0, T4);
                 } else {
-                    self.tso_before_store();
-                    self.a.str_uxtw(2, T0, BASE, T4);
+                    self.gst(2, T0, T4);
                 }
                 if m != Fist {
                     self.x87_pop();
@@ -1513,11 +1592,16 @@ impl Translator {
     /// Compute the effective address of the memory operand into T4.
     fn ea(&mut self, insn: &Instruction) {
         let base = insn.memory_base();
-        // Only ESP-based accesses are assumed thread-local (EBP may be a
-        // general register with -fomit-frame-pointer).
-        self.ea_stack = base == Register::ESP;
         let index = insn.memory_index();
         let disp = insn.memory_displacement32();
+        // Thread-local for TSO purposes: ESP-based accesses and locals below the
+        // frame pointer ([ebp - x]; EBP may be a general register with
+        // -fomit-frame-pointer, but negative offsets from an object pointer are
+        // rare). Skipping their barriers keeps the ordering of everything else:
+        // the dmb after a load orders it before all later accesses, the dmb
+        // before a store all earlier stores before it.
+        self.ea_stack = base == Register::ESP
+            || (base == Register::EBP && index == Register::None && (disp as i32) < 0 && tso_ebp_local());
         let mut have = false;
         if base != Register::None && index == Register::None {
             // [base + disp]: one instruction when the displacement fits an add/sub immediate
@@ -1579,8 +1663,7 @@ impl Translator {
             OpKind::Memory => {
                 self.ea(insn);
                 let sz = insn.memory_size().size();
-                self.a.ldr_uxtw(log2(sz), rd, BASE, T4);
-                self.tso_after_load();
+                self.gld(log2(sz), rd, T4);
             }
             _ => self.a.mov_w_imm(rd, insn.immediate(i) as u32 & size_mask(interp::op_size(insn, i))),
         }
@@ -1610,8 +1693,7 @@ impl Translator {
                     self.ea(insn);
                 }
                 let sz = insn.memory_size().size();
-                self.tso_before_store();
-                self.a.str_uxtw(log2(sz), rs, BASE, T4);
+                self.gst(log2(sz), rs, T4);
             }
             _ => unreachable!(),
         }
@@ -2547,8 +2629,7 @@ impl Translator {
             _ => 4,
         };
         self.ea(insn);
-        self.a.ldr_v_uxtw(sz, tmp, BASE, T4);
-        self.tso_after_load();
+        self.vld(sz, tmp, T4);
         tmp
     }
 
@@ -2621,14 +2702,12 @@ impl Translator {
                     } else {
                         self.ea(insn);
                         let vd = self.xdef(d);
-                        self.a.ldr_v_uxtw(4, vd, BASE, T4);
-                        self.tso_after_load();
+                        self.vld(4, vd, T4);
                     }
                 } else {
                     let vs = self.xget(xi(1));
                     self.ea(insn);
-                    self.tso_before_store();
-                    self.a.str_v_uxtw(4, vs, BASE, T4);
+                    self.vst(4, vs, T4);
                 }
             }
             Movss | Movsd => {
@@ -2640,13 +2719,11 @@ impl Translator {
                 } else if reg(0) {
                     self.ea(insn);
                     let vd = self.xdef(xi(0));
-                    self.a.ldr_v_uxtw(sz, vd, BASE, T4);
-                    self.tso_after_load();
+                    self.vld(sz, vd, T4);
                 } else {
                     let vs = self.xget(xi(1));
                     self.ea(insn);
-                    self.tso_before_store();
-                    self.a.str_v_uxtw(sz, vs, BASE, T4);
+                    self.vst(sz, vs, T4);
                 }
             }
             Movd => {
@@ -2658,8 +2735,7 @@ impl Translator {
                     } else {
                         self.ea(insn);
                         let vd = self.xdef(xi(0));
-                        self.a.ldr_v_uxtw(2, vd, BASE, T4);
-                        self.tso_after_load();
+                        self.vld(2, vd, T4);
                     }
                 } else {
                     let vs = self.xget(xi(1));
@@ -2667,8 +2743,7 @@ impl Translator {
                         self.a.fmov_w_s(gr(insn.op0_register()), vs);
                     } else {
                         self.ea(insn);
-                        self.tso_before_store();
-                        self.a.str_v_uxtw(2, vs, BASE, T4);
+                        self.vst(2, vs, T4);
                     }
                 }
             }
@@ -2680,21 +2755,18 @@ impl Translator {
                 } else if reg(0) {
                     self.ea(insn);
                     let vd = self.xdef(xi(0));
-                    self.a.ldr_v_uxtw(3, vd, BASE, T4);
-                    self.tso_after_load();
+                    self.vld(3, vd, T4);
                 } else {
                     let vs = self.xget(xi(1));
                     self.ea(insn);
-                    self.tso_before_store();
-                    self.a.str_v_uxtw(3, vs, BASE, T4);
+                    self.vst(3, vs, T4);
                 }
             }
             Movlps | Movlpd | Movhps | Movhpd => {
                 let hi = matches!(m, Movhps | Movhpd) as u32;
                 if reg(0) {
                     self.ea(insn);
-                    self.a.ldr_v_uxtw(3, V0, BASE, T4);
-                    self.tso_after_load();
+                    self.vld(3, V0, T4);
                     let vd = self.xmod(xi(0));
                     self.a.ins_elem(3, vd, hi, V0, 0);
                 } else {
@@ -2702,11 +2774,9 @@ impl Translator {
                     self.ea(insn);
                     if hi == 1 {
                         self.a.ins_elem(3, V0, 0, vs, 1);
-                        self.tso_before_store();
-                        self.a.str_v_uxtw(3, V0, BASE, T4);
+                        self.vst(3, V0, T4);
                     } else {
-                        self.tso_before_store();
-                        self.a.str_v_uxtw(3, vs, BASE, T4);
+                        self.vst(3, vs, T4);
                     }
                 }
             }
@@ -2750,8 +2820,7 @@ impl Translator {
                 self.ensure_xbase();
                 self.a.ldr_imm(2, T0, XB, MXCSR_OFF - XMM_OFF);
                 self.ea(insn);
-                self.tso_before_store();
-                self.a.str_uxtw(2, T0, BASE, T4);
+                self.gst(2, T0, T4);
             }
 
             // ---- float arithmetic ----
@@ -2879,8 +2948,7 @@ impl Translator {
                     gr(insn.op1_register())
                 } else {
                     self.ea(insn);
-                    self.a.ldr_uxtw(2, T0, BASE, T4);
-                    self.tso_after_load();
+                    self.gld(2, T0, T4);
                     T0
                 };
                 self.a.scvtf_s_w(dbl, V0, w);
@@ -3263,13 +3331,11 @@ impl Translator {
         if insn.op_kind(i) == OpKind::Memory {
             let sz = insn.memory_size().size();
             if insn.op0_kind() == OpKind::Memory {
-                self.a.ldr_uxtw(log2(sz), rd, BASE, T4);
-                self.tso_after_load();
+                self.gld(log2(sz), rd, T4);
                 return;
             }
             self.ea(insn);
-            self.a.ldr_uxtw(log2(sz), rd, BASE, T4);
-            self.tso_after_load();
+            self.gld(log2(sz), rd, T4);
             return;
         }
         // The address in T4 (operand 0) must survive: load() only touches T4 for memory.

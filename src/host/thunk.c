@@ -128,7 +128,9 @@ static void *thunk_stats_thread(void *arg) {
         qsort(v, n, sizeof *v, cmp_calls);
         LOGI("thunk stats: %.0f calls/s, %.1f%% of one core inside host calls", (double)total / thunk_stats,
              total_t / 1e7 / thunk_stats);
-        for (uint32_t i = 0; i < n && i < 25 && (v[i] >> 16); i++) {
+        static int top = -1; // DXH_THUNK_STATS_TOP: entries per report (default 25)
+        if (top < 0) top = getenv("DXH_THUNK_STATS_TOP") ? atoi(getenv("DXH_THUNK_STATS_TOP")) : 25;
+        for (uint32_t i = 0; i < n && i < (uint32_t)top && (v[i] >> 16); i++) {
             uint32_t id = v[i] & 0xffff;
             LOGI("  %6.2f%% core %9.0f calls/s %7.0f ns/call  %s", dt[id] / 1e7 / thunk_stats,
                  (double)calls_delta(id) / thunk_stats, calls_delta(id) ? (double)dt[id] / calls_delta(id) : 0,
@@ -177,7 +179,7 @@ void host_dispatch(struct guest_regs *r) {
         if (id < MAX_THUNKS) {
             if (pthread_main_np()) {
                 cpu_main_heartbeat();
-                if (atomic_load_explicit(&mainq_pending, memory_order_relaxed)) mainq_drain();
+                if (atomic_load_explicit(&mainq_pending, memory_order_relaxed)) mainq_drain_waiting();
             }
             atomic_fetch_add_explicit(&thunk_calls[id], 1, memory_order_relaxed);
             uint64_t t0 = mach_absolute_time();
@@ -200,7 +202,7 @@ void host_dispatch(struct guest_regs *r) {
     }
     if (pthread_main_np()) {
         cpu_main_heartbeat();
-        if (atomic_load_explicit(&mainq_pending, memory_order_relaxed)) mainq_drain();
+        if (atomic_load_explicit(&mainq_pending, memory_order_relaxed)) mainq_drain_waiting();
     }
     if (id >= nthunks) fatal("bad thunk id %u", id);
     LOGT("-> %s(%#x, %#x, %#x, %#x) ret=%#x", thunks[id].name, gread32(r->esp + 4), gread32(r->esp + 8),

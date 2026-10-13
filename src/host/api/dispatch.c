@@ -76,7 +76,7 @@ static void q_sync(dispatch_queue_t q, void *ctx, void (*fn)(void *)) {
     if (q == dispatch_get_main_queue()) {
         extern void cgl_drop_held_locks(void), cgl_retake_held_locks(void);
         cgl_drop_held_locks();
-        mainq_run(^{
+        mainq_run_guest(^{
           fn(ctx);
         });
         cgl_retake_held_locks();

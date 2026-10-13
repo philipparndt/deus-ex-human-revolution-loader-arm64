@@ -69,6 +69,8 @@ static inline uint32_t gcall3(gaddr_t fn, uint32_t a, uint32_t b, uint32_t c) {
     return (uint32_t)cpu_call(fn, 3, v);
 }
 
+// Log every guest thread's host call and guest frames (native backend; no-op otherwise).
+void cpu_dump_guest_threads(void);
 // Watchdog (DXH_WATCHDOG, native backend): the main thread is alive.
 void cpu_main_heartbeat(void);
 

@@ -28,7 +28,15 @@ THUNK(CFRunLoopGetCurrent) { RET_CF(CFRunLoopGetCurrent()); }
 THUNK(CFRunLoopGetMain) { RET_CF(CFRunLoopGetMain()); }
 THUNK(CFRunLoopRun) { CFRunLoopRun(); }
 THUNK(CFRunLoopRunInMode) { RET((uint32_t)CFRunLoopRunInMode(MODE(0), ARGD(1), ARGBOOL(3))); }
-THUNK(CFRunLoopStop) { CFRunLoopStop(RL(0)); }
+THUNK(CFRunLoopStop) {
+    if (RL(0) == CFRunLoopGetMain()) {
+        extern void cb_stop_main_loop(void); // carbon_event.m
+        static int logged;
+        if (logged++ < 3) LOGI("cf: CFRunLoopStop(main run loop): quitting the main thread's event loop");
+        cb_stop_main_loop();
+    }
+    CFRunLoopStop(RL(0));
+}
 THUNK(CFRunLoopWakeUp) { CFRunLoopWakeUp(RL(0)); }
 THUNK(CFRunLoopIsWaiting) { RET_BOOL(CFRunLoopIsWaiting(RL(0))); }
 THUNK(CFRunLoopCopyCurrentMode) { RET_CF(CFRunLoopCopyCurrentMode(RL(0))); }

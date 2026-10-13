@@ -44,6 +44,13 @@ SPECIAL = {
     "glFlushMappedBufferRange", "glFlushMappedBufferRangeAPPLE", "glBufferParameteriAPPLE",
     "glFenceSync", "glClientWaitSync", "glDeleteSync", "glWaitSync", "glGetSynciv", "glIsSync",
     "glTexSubImage2D", "glBufferData", "glBufferSubData", "glCopyBufferSubData",
+    # render scale (gl_scale.c)
+    "glTexImage2D", "glTexStorage2D", "glTexImage2DMultisample", "glRenderbufferStorage",
+    "glRenderbufferStorageEXT", "glRenderbufferStorageMultisample", "glRenderbufferStorageMultisampleEXT",
+    "glBindFramebuffer", "glFramebufferTexture2D", "glFramebufferTexture", "glFramebufferTextureLayer",
+    "glFramebufferRenderbuffer", "glDeleteTextures", "glDeleteRenderbuffers", "glDeleteRenderbuffersEXT",
+    "glDeleteFramebuffers", "glViewport", "glScissor", "glBlitFramebuffer", "glGetIntegerv",
+    "glCopyTexSubImage2D", "glCopyTexImage2D", "glReadPixels", "glProgramStringARB",
 }
 
 # Untyped data pointers that may be buffer offsets instead (see gl_internal.h).

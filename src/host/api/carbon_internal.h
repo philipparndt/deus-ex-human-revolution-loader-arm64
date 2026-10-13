@@ -187,6 +187,7 @@ OSStatus cb_hiobject_construct(CBObject *o, NSString *classID, gaddr_t initEvent
     bool disposed;
     int cf_refs; // Carbon/CF retain count of the WindowRef (CFRetain/CFRelease)
     bool visible;
+    bool blank_logged; // kept hidden as a display blanker (carbon_window.m)
 }
 @end
 CBWindow *cb_window_for_ns(NSWindow *w);

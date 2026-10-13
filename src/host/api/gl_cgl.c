@@ -9,7 +9,11 @@
 #include <stdlib.h>
 #include <time.h>
 #include "gl_internal.h"
+#include "gmem.h"
 
+#include <OpenGL/gl3.h>
+#include <dispatch/dispatch.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 
 #define CTX(i) ((CGLContextObj)hobj_unwrap(ARG(i)))
@@ -303,15 +307,104 @@ static void fps_frame(uint64_t flush_ns) {
     if (now - window_start >= (uint64_t)interval * 1000000000ull) {
         double secs = (now - window_start) / 1e9;
         extern volatile int cb_app_active; // carbon_event.m: Feral throttles to ~9 fps in the background
-        LOGI("fps: %.1f frames/s, worst %.1f ms, %u frames > 33 ms, %.1f ms/frame in flush%s", frames / secs,
-             worst / 1e6, slow, frames ? in_flush / 1e6 / frames : 0, cb_app_active ? "" : " (in background)");
+        extern uint64_t gl_shadow_bytes; // gl_special.c: persistent buffer shadows
+        LOGI("fps: %.1f frames/s, worst %.1f ms, %u frames > 33 ms, %.1f ms/frame in flush, guest mem %u MB (shadows "
+             "%u MB)%s",
+             frames / secs, worst / 1e6, slow, frames ? in_flush / 1e6 / frames : 0,
+             gmem_used_pages() >> (20 - GPAGE_SHIFT), (unsigned)(gl_shadow_bytes >> 20),
+             cb_app_active ? "" : " (in background)");
         window_start = now;
         frames = slow = 0;
         worst = in_flush = 0;
     }
 }
 
+// --- frame capture (autoplay.m) -------------------------------------------------------------
+// The bot asks for the next presented frame; the flush reads the back buffer
+// before presenting it. Pixels are RGBA, bottom row first.
+
+#ifndef GL_READ_FRAMEBUFFER_BINDING
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
+#endif
+#ifndef GL_PIXEL_PACK_BUFFER_BINDING
+#define GL_PIXEL_PACK_BUFFER 0x88EB
+#define GL_PIXEL_PACK_BUFFER_BINDING 0x88ED
+#endif
+
+struct glshot {
+    int w, h;
+    uint8_t *px;
+    dispatch_semaphore_t done;
+};
+static struct glshot *_Atomic shot_req;
+_Atomic uint64_t gl_frames; // presented frames
+
+static void shot_capture(CGLContextObj ctx, struct glshot *r) {
+    GLint wh[2] = {0, 0}, vp[4];
+    CGLGetParameter(ctx, kCGLCPSurfaceBackingSize, wh);
+    if (wh[0] <= 0 || wh[1] <= 0) {
+        glGetIntegerv(GL_VIEWPORT, vp);
+        wh[0] = vp[2], wh[1] = vp[3];
+    }
+    if (wh[0] <= 0 || wh[1] <= 0) return;
+    GLint rfb, pbo, rbuf, align, rowlen, skiprows, skippix;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &align);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &rowlen);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &skiprows);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &skippix);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glGetIntegerv(GL_READ_BUFFER, &rbuf);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    glReadBuffer(GL_BACK);
+    r->px = malloc((size_t)wh[0] * wh[1] * 4);
+    glReadPixels(0, 0, wh[0], wh[1], GL_RGBA, GL_UNSIGNED_BYTE, r->px);
+    r->w = wh[0], r->h = wh[1];
+    glReadBuffer(rbuf);
+    glPixelStorei(GL_PACK_ALIGNMENT, align);
+    glPixelStorei(GL_PACK_ROW_LENGTH, rowlen);
+    glPixelStorei(GL_PACK_SKIP_ROWS, skiprows);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, skippix);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, rfb);
+}
+
+// Bot thread: the next presented frame, or NULL after timeout seconds.
+uint8_t *gl_capture_frame(int *w, int *h, double timeout) {
+    struct glshot *r = calloc(1, sizeof *r);
+    r->done = dispatch_semaphore_create(0);
+    struct glshot *none = NULL;
+    if (!atomic_compare_exchange_strong(&shot_req, &none, r)) {
+        free(r);
+        return NULL;
+    }
+    if (dispatch_semaphore_wait(r->done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * 1e9)))) {
+        struct glshot *mine = r;
+        if (atomic_compare_exchange_strong(&shot_req, &mine, NULL)) { // not taken: no frame
+            free(r);
+            return NULL;
+        }
+        dispatch_semaphore_wait(r->done, DISPATCH_TIME_FOREVER); // being captured right now
+    }
+    uint8_t *px = r->px;
+    *w = r->w, *h = r->h;
+    free(r);
+    return px;
+}
+
 THUNK(CGLFlushDrawable) {
+    struct glshot *req = atomic_exchange(&shot_req, NULL);
+    if (req) {
+        shot_capture(CTX(0), req);
+        dispatch_semaphore_signal(req->done);
+    }
+    atomic_fetch_add(&gl_frames, 1);
     uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     CGLError e = CGLFlushDrawable(CTX(0));
     fps_frame(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0);
@@ -350,12 +443,19 @@ THUNK(CGLSetParameter) {
         return;
     }
     LOGI("cgl: CGLSetParameter(%d, %d%s)", pname, p && cp_count(pname) ? p[0] : 0, cp_count(pname) > 1 ? ", ..." : "");
+    if (pname == kCGLCPSurfaceBackingSize && p) {
+        GLint wh[2] = {p[0], p[1]};
+        gl_scale_backing(wh); // DXH_RENDER_SCALE
+        RET(CGLSetParameter(CTX(0), pname, wh));
+        return;
+    }
     RET(CGLSetParameter(CTX(0), pname, p));
 }
 THUNK(CGLGetParameter) {
     int pname = ARGI(1);
     GLint v[8] = {0};
     CGLError err = CGLGetParameter(CTX(0), pname, v);
+    if (pname == kCGLCPSurfaceBackingSize) gl_scale_backing_back(v);
     int n = pname == kCGLCPClientStorage ? 1 : cp_count(pname);
     if (ARG(2))
         for (int i = 0; i < n; i++) gwrite32(ARG(2) + 4 * (uint32_t)i, (uint32_t)v[i]);

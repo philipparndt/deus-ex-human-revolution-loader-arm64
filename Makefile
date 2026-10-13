@@ -1,7 +1,8 @@
 # dxhost build.
 #
 #   make            -> build/x86_64/dxhost (Rosetta backend, feasibility check)
-#   make run        -> run Human Revolution with the Rosetta backend
+#   make run        -> build and run Human Revolution natively (dxcpu), 3D at 2x with 1080p HUD
+#   make run-rosetta -> run Human Revolution with the Rosetta backend
 
 HR_APP ?= games/hr/Deus Ex Human Revolution - Directors Cut.app
 
@@ -130,10 +131,17 @@ $(DXCPU_DIR)/guest/libunwind-i386.a: src/guest/libunwind/build/libunwind-i386.a
 
 comma := ,
 
-run: $(ROSETTA_DIR)/dxhost
+# Render scale: keep the in-game resolution at 1920x1080; the 3D image is
+# rendered at RENDER_SCALE times that, the HUD keeps its 1080p layout.
+RENDER_SCALE ?= 2
+
+run: native-dxcpu
+	DXH_RENDER_SCALE=$(RENDER_SCALE) $(DXCPU_DIR)/dxhost "$(HR_APP)"
+
+run-rosetta: $(ROSETTA_DIR)/dxhost
 	$(ROSETTA_DIR)/dxhost "$(HR_APP)"
 
 clean:
 	rm -rf build
 
-.PHONY: all native native-dxcpu run clean
+.PHONY: all native native-dxcpu run run-rosetta clean

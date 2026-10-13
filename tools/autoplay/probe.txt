@@ -1,0 +1,11 @@
+# probe: launcher -> intro -> menu, screenshots along the way
+wait 15
+shot launcher
+key return
+wait 20
+shot after-launcher
+repeat 12
+wait 10
+shot menu
+end
+quit

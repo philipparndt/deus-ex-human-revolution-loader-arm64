@@ -83,7 +83,11 @@ void gl_ctx_forget(CGLContextObj c) {
         if (s->cgl != c) continue;
         *pp = s->next;
         for (int i = 0; i < 16; i++)
-            if (s->maps[i].buf) gheap_free(s->maps[i].guest);
+            if (s->maps[i].buf && !s->maps[i].persistent) gheap_free(s->maps[i].guest);
+        for (uint32_t b = 0; b < s->shadow_cap; b++)
+            if (s->shadow[b].g) gheap_free(s->shadow[b].g);
+        free(s->shadow);
+        free(s->meta);
         // Cached strings stay in guest memory: the guest may still hold them.
         free(s->vao_ebo);
         free(s->buf_noflush);
@@ -128,8 +132,11 @@ static GLuint bound_buffer(struct glctx *s, GLenum target) {
     return 0;
 }
 
+static void shadow_drop(struct glctx *s, GLuint b);
 static void track_bind(GLenum target, GLuint buf) {
     struct glctx *s = gl_cur();
+    if (buf && target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER && target != GL_COPY_READ_BUFFER)
+        shadow_drop(s, buf); // may be written by the GPU there
     if (target == GL_ELEMENT_ARRAY_BUFFER) {
         grow_u32(&s->vao_ebo, &s->vao_ebo_cap, s->cur_vao);
         s->vao_ebo[s->cur_vao] = buf;
@@ -168,6 +175,80 @@ static struct glmap *find_map(struct glctx *s, GLuint buf) {
     return NULL;
 }
 
+// --- persistent buffer shadows -------------------------------------------------------
+// A write-only glMapBuffer of a buffer the GPU may still use waits in the driver
+// until the GPU is done (HR gameplay: up to ~100 ms). After the first such map
+// the guest's copy of the whole buffer is kept: later maps hand it out again
+// and the unmap re-specifies the storage with glBufferData, which never waits.
+// Every CPU-side write to the buffer keeps the copy current; anything else
+// (GPU writes, range maps, copies) drops it.
+#define SHADOW_BUDGET (256u << 20)
+uint64_t gl_shadow_bytes; // read by the fps log (gl_cgl.c)
+#define shadow_bytes gl_shadow_bytes
+
+static struct bufshadow *shadow_of(struct glctx *s, GLuint b) {
+    return b && b < s->shadow_cap && s->shadow[b].g ? &s->shadow[b] : NULL;
+}
+
+static void shadow_drop(struct glctx *s, GLuint b) {
+    struct bufshadow *sh = shadow_of(s, b);
+    if (!sh) return;
+    struct glmap *m = find_map(s, b);
+    if (m && m->persistent && m->guest == sh->g) m->persistent = false; // the unmap frees it
+    else gheap_free(sh->g);
+    shadow_bytes -= sh->size;
+    *sh = (struct bufshadow){0, 0};
+}
+
+// Keep guest memory g (size bytes, the buffer's full contents) as b's shadow.
+static bool shadow_adopt(struct glctx *s, GLuint b, gaddr_t g, uint32_t size) {
+    static int off = -1; // DXH_GL_NOSHADOW=1: no persistent shadows (diagnostics)
+    if (off < 0) off = getenv("DXH_GL_NOSHADOW") != NULL;
+    if (off || !b || shadow_bytes + size > SHADOW_BUDGET) return false;
+    if (b >= s->shadow_cap) {
+        uint32_t n = s->shadow_cap ? s->shadow_cap : 256;
+        while (n <= b) n *= 2;
+        s->shadow = realloc(s->shadow, n * sizeof *s->shadow);
+        memset(s->shadow + s->shadow_cap, 0, (n - s->shadow_cap) * sizeof *s->shadow);
+        s->shadow_cap = n;
+    }
+    shadow_drop(s, b);
+    s->shadow[b] = (struct bufshadow){g, size};
+    shadow_bytes += size;
+    return true;
+}
+
+// Only vertex and index buffers: the GPU writes pixel pack / transform feedback ones.
+// Buffer size and usage, as glBufferData set them. Querying the driver
+// (glGetBufferParameteriv) waits for Apple's multithreaded GL engine to drain
+// its command queue (shader compiles included): up to 300 ms per map in HR.
+static void meta_set(struct glctx *s, GLuint b, uint32_t size, GLenum usage) {
+    if (!b) return;
+    if (b >= s->meta_cap) {
+        uint32_t n = s->meta_cap ? s->meta_cap : 256;
+        while (n <= b) n *= 2;
+        s->meta = realloc(s->meta, n * sizeof *s->meta);
+        memset(s->meta + s->meta_cap, 0, (n - s->meta_cap) * sizeof *s->meta);
+        s->meta_cap = n;
+    }
+    s->meta[b] = (struct bufmeta){size, usage};
+}
+static void buffer_meta(struct glctx *s, GLenum target, GLuint b, GLint *size, GLint *usage) {
+    if (b && b < s->meta_cap && s->meta[b].usage) {
+        *size = (GLint)s->meta[b].size;
+        *usage = (GLint)s->meta[b].usage;
+        return;
+    }
+    glGetBufferParameteriv(target, GL_BUFFER_SIZE, size);
+    glGetBufferParameteriv(target, GL_BUFFER_USAGE, usage);
+    meta_set(s, b, (uint32_t)*size, (GLenum)*usage);
+}
+
+static bool virtual_maps(void);
+static bool shadow_target(GLenum target) {
+    return target == GL_ARRAY_BUFFER || target == GL_ELEMENT_ARRAY_BUFFER;
+}
+
 THUNK(glDeleteBuffers) {
     struct glctx *s = gl_cur();
     GLsizei n = ARGI(0);
@@ -178,9 +259,11 @@ THUNK(glDeleteBuffers) {
         for (int k = 0; k < GLB_COUNT; k++)
             if (s->bind[k] == b) s->bind[k] = 0;
         if (gl_elem_binding(s) == b) s->vao_ebo[s->cur_vao] = 0;
+        shadow_drop(s, b);
+        if (b < s->meta_cap) s->meta[b] = (struct bufmeta){0, 0};
         struct glmap *m = find_map(s, b);
         if (m) { // deleting a mapped buffer unmaps it
-            gheap_free(m->guest);
+            if (!m->persistent) gheap_free(m->guest);
             memset(m, 0, sizeof *m);
         }
         if (b < s->buf_noflush_cap) s->buf_noflush[b] = 0;
@@ -221,13 +304,35 @@ THUNK(glBufferData) {
     GLenum target = ARG(0);
     glBufferData(target, ARGIPTR(1), ARGP(2), (GLenum)ARG(3));
     struct glctx *s = gl_cur();
-    uint8_t *f = buf_flags(s, bound_buffer(s, target));
+    GLuint b = bound_buffer(s, target);
+    meta_set(s, b, (uint32_t)ARGIPTR(1), (GLenum)ARG(3));
+    struct bufshadow *sh = shadow_of(s, b);
+    if (sh && sh->size != (uint32_t)ARGIPTR(1)) shadow_drop(s, b), sh = NULL;
+    if (sh && ARG(2)) memcpy(g2h(sh->g), ARGP(2), sh->size); // without data: undefined, keep
+    // Dynamic vertex/index data will likely be mapped: start its shadow now.
+    GLenum usage = (GLenum)ARG(3);
+    if (!sh && ARG(2) && shadow_target(target) && virtual_maps() && ARGIPTR(1) > 0 &&
+        (usage == GL_DYNAMIC_DRAW || usage == GL_STREAM_DRAW)) {
+        uint32_t n = (uint32_t)ARGIPTR(1);
+        gaddr_t g = gheap_memalign(64, n);
+        if (g) {
+            memcpy(g2h(g), ARGP(2), n);
+            if (!shadow_adopt(s, b, g, n)) gheap_free(g);
+        }
+    }
+    uint8_t *f = buf_flags(s, b);
     if (f) *f = ARG(2) ? (*f & ~BUF_UNDEFINED) : (*f | BUF_UNDEFINED); // orphaned: old contents gone
 }
 THUNK(glBufferSubData) {
     GLenum target = ARG(0);
     glBufferSubData(target, ARGIPTR(1), ARGIPTR(2), ARGP(3));
     struct glctx *s = gl_cur();
+    struct bufshadow *sh = shadow_of(s, bound_buffer(s, target));
+    if (sh) {
+        uint64_t off = (uint64_t)ARGIPTR(1), len = (uint64_t)ARGIPTR(2);
+        if (off + len <= sh->size && ARG(3)) memcpy((uint8_t *)g2h(sh->g) + off, ARGP(3), len);
+        else shadow_drop(s, bound_buffer(s, target));
+    }
     uint8_t *f = buf_flags(s, bound_buffer(s, target));
     if (f) *f &= ~BUF_UNDEFINED;
 }
@@ -235,6 +340,7 @@ THUNK(glCopyBufferSubData) {
     GLenum wt = ARG(1);
     glCopyBufferSubData((GLenum)ARG(0), wt, ARGIPTR(2), ARGIPTR(3), ARGIPTR(4));
     struct glctx *s = gl_cur();
+    shadow_drop(s, bound_buffer(s, wt));
     uint8_t *f = buf_flags(s, bound_buffer(s, wt));
     if (f) *f &= ~BUF_UNDEFINED;
 }
@@ -287,7 +393,7 @@ static gaddr_t map_shadow(GLenum target, void *host, uint32_t off, uint32_t len,
     struct glmap *m = find_map(s, buf);
     if (m) {
         LOGI("gl: buffer %u mapped twice", buf);
-        gheap_free(m->guest);
+        if (!m->persistent) gheap_free(m->guest);
     } else {
         for (int i = 0; i < 16 && !m; i++)
             if (!s->maps[i].buf) m = &s->maps[i];
@@ -332,19 +438,27 @@ static GLbitfield legacy_access(GLenum access) {
 // writes the shadow; flushed ranges go up with glBufferSubData, a fully
 // rewritten orphaned buffer with glBufferData (fresh storage). DXH_GL_REALMAP=1
 // disables this.
+// With a persistent shadow, the guest writes it in place and the whole buffer
+// is known, so a full upload re-specifies the storage (as for an orphaned one).
 static gaddr_t map_virtual(GLenum target, GLuint buf, uint32_t size) {
     struct glctx *s = gl_cur();
     struct glmap *m = NULL;
     for (int i = 0; i < 16 && !m; i++)
         if (!s->maps[i].buf) m = &s->maps[i];
     if (!m) return 0;
-    gaddr_t g = gheap_memalign(64, size ? size : 1);
+    struct bufshadow *sh = shadow_of(s, buf);
+    if (sh && sh->size != size) {
+        shadow_drop(s, buf);
+        sh = NULL;
+    }
+    gaddr_t g = sh ? sh->g : gheap_memalign(64, size ? size : 1);
     if (!g) return 0;
-    GLint usage = GL_DYNAMIC_DRAW;
-    glGetBufferParameteriv(target, GL_BUFFER_USAGE, &usage);
-    *m = (struct glmap){buf, NULL, g, 0, size, GL_MAP_WRITE_BIT, false, true, buf_flag(s, buf, BUF_UNDEFINED),
-                        (GLenum)usage};
-    LOGT("gl: virtual map of buffer %u (%u bytes%s)", buf, size, m->undefined ? ", orphaned" : "");
+    GLint bsize, usage;
+    buffer_meta(s, target, buf, &bsize, &usage);
+    *m = (struct glmap){buf, NULL, g, 0, size, GL_MAP_WRITE_BIT, false, true,
+                        sh != NULL || buf_flag(s, buf, BUF_UNDEFINED), (GLenum)usage, sh != NULL};
+    LOGT("gl: virtual map of buffer %u (%u bytes%s)", buf, size,
+         sh ? ", shadowed" : m->undefined ? ", orphaned" : "");
     return g;
 }
 
@@ -371,12 +485,15 @@ static void virtual_upload(GLenum target, struct glmap *m, uint32_t off, uint32_
 
 THUNK(glMapBuffer) {
     GLenum target = ARG(0), access = ARG(1);
-    GLint size = 0;
-    glGetBufferParameteriv(target, GL_BUFFER_SIZE, &size);
-    if (access == GL_WRITE_ONLY && virtual_maps()) {
+    GLint size = 0, usage0 = 0;
+    buffer_meta(gl_cur(), target, bound_buffer(gl_cur(), target), &size, &usage0);
+    if ((access == GL_WRITE_ONLY || access == GL_READ_WRITE) && virtual_maps()) {
         struct glctx *s = gl_cur();
         GLuint buf = bound_buffer(s, target);
-        if (buf && !find_map(s, buf) && (buf_flag(s, buf, BUF_NOFLUSH) || buf_flag(s, buf, BUF_UNDEFINED))) {
+        struct bufshadow *sh = shadow_target(target) ? shadow_of(s, buf) : NULL;
+        bool known = sh && sh->size == (uint32_t)size;
+        if (buf && !find_map(s, buf) &&
+            (known || (access == GL_WRITE_ONLY && (buf_flag(s, buf, BUF_NOFLUSH) || buf_flag(s, buf, BUF_UNDEFINED))))) {
             gaddr_t g = map_virtual(target, buf, (uint32_t)size);
             if (g) {
                 if (mstats_enabled()) {
@@ -388,12 +505,23 @@ THUNK(glMapBuffer) {
             }
         }
     }
-    uint64_t t0 = mstats_enabled() ? now_ns() : 0;
+    uint64_t t0 = now_ns();
     void *host = glMapBuffer(target, access);
-    if (t0) {
+    uint64_t dt = now_ns() - t0;
+    if (mstats_enabled()) {
         atomic_fetch_add(&mstats.maps, 1);
-        atomic_fetch_add(&mstats.map_ns, now_ns() - t0);
+        atomic_fetch_add(&mstats.map_ns, dt);
         mstats_tick();
+    }
+    if (dt > 20000000) { // which buffers still wait in the driver
+        struct glctx *s = gl_cur();
+        GLuint b = bound_buffer(s, target);
+        struct bufshadow *sh = shadow_of(s, b);
+        GLint usage = usage0;
+        LOGI("gl: driver map of buffer %u (target %#x, %d bytes, usage %#x, access %#x, %s%s%s, shadow %u) took %.1f ms",
+             b, target, size, usage, access, buf_flag(s, b, BUF_UNDEFINED) ? "orphaned " : "",
+             buf_flag(s, b, BUF_NOFLUSH) ? "explicit-flush " : "", find_map(s, b) ? "mapped " : "",
+             sh ? sh->size : 0, dt / 1e6);
     }
     RET(map_shadow(target, host, 0, (uint32_t)size, legacy_access(access), false));
 }
@@ -403,6 +531,7 @@ THUNK(glMapBufferRange) {
     GLintptr off = ARGIPTR(1);
     GLsizeiptr len = ARGIPTR(2);
     GLbitfield access = ARG(3);
+    if (access & GL_MAP_WRITE_BIT) shadow_drop(gl_cur(), bound_buffer(gl_cur(), target));
     uint64_t t0 = mstats_enabled() ? now_ns() : 0;
     void *host = glMapBufferRange(target, off, len, access);
     if (t0) {
@@ -475,7 +604,10 @@ THUNK(glUnmapBuffer) {
     if (m && m->virt) {
         // Implicit flush (orphaned buffer without explicit flushing): all of it.
         if (!buf_flag(s, b, BUF_NOFLUSH)) virtual_upload(target, m, 0, m->len);
-        gheap_free(m->guest);
+        // The contents were undefined (orphaned) or known (shadow), so the
+        // guest copy now matches the buffer wherever it is defined: keep it.
+        bool keep = !m->persistent && m->undefined && shadow_target(target) && shadow_adopt(s, b, m->guest, m->len);
+        if (!m->persistent && !keep) gheap_free(m->guest);
         memset(m, 0, sizeof *m);
         if (b < s->buf_noflush_cap) s->buf_noflush[b] &= ~BUF_UNDEFINED;
         RET(GL_TRUE);
@@ -494,7 +626,13 @@ THUNK(glUnmapBuffer) {
                 }
             }
         }
-        gheap_free(m->guest);
+        // A whole-buffer glMapBuffer (copied in, so the guest copy is the full
+        // contents): keep it as the persistent shadow for the next maps. With
+        // explicit flushing, written but unflushed bytes are undefined in the
+        // buffer, so the copy still matches wherever the buffer is defined.
+        bool keep = !m->range && (m->access & GL_MAP_WRITE_BIT) && shadow_target(target) && virtual_maps() &&
+                    shadow_adopt(s, b, m->guest, m->len);
+        if (!keep) gheap_free(m->guest);
         memset(m, 0, sizeof *m);
         if (b < s->buf_noflush_cap) s->buf_noflush[b] &= ~BUF_UNDEFINED; // written now
     } else {
@@ -712,6 +850,7 @@ THUNK(glTexSubImage2D) {
         first = true;
     }
     pthread_mutex_unlock(&lock);
+    if (ARG(1) == 0) gl_scale_tex_upload(target); // render scale: image data means real size
     glTexSubImage2D(target, (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), w, h, format, type, pixels);
     if (first) {
         GLenum err = glGetError();

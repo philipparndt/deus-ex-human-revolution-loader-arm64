@@ -522,6 +522,18 @@ impl Asm {
     pub fn fmov_x_d(&mut self, d: u32, n: u32) {
         self.emit(0x9e66_0000 | (n << 5) | d);
     }
+    /// add xd, xn, wm, uxtw
+    pub fn add_x_uxtw(&mut self, rd: u32, xn: u32, wm: u32) {
+        self.emit(0x8b20_4000 | (wm << 16) | (xn << 5) | rd);
+    }
+    /// ldapr{b,h} rt, [xn]: load-acquire (RCpc, FEAT_LRCPC); size as ldr_uxtw
+    pub fn ldapr(&mut self, size: u32, rt: u32, xn: u32) {
+        self.emit((size << 30) | 0x38bf_c000 | (xn << 5) | rt);
+    }
+    /// stlr{b,h} rt, [xn]: store-release; size as str_uxtw
+    pub fn stlr(&mut self, size: u32, rt: u32, xn: u32) {
+        self.emit((size << 30) | 0x089f_fc00 | (xn << 5) | rt);
+    }
     /// dmb ishld: earlier loads before later loads and stores
     pub fn dmb_ishld(&mut self) {
         self.emit(0xd503_39bf);
@@ -662,6 +674,11 @@ impl Asm {
     pub fn umov_w(&mut self, sz: Esz, d: u32, n: u32, j: u32) {
         let imm5 = ((j << 1) | 1) << sz;
         self.emit(0x0e00_3c00 | (imm5 << 16) | (n << 5) | d);
+    }
+    /// umov xd, vn.d[j]
+    pub fn umov_x_d(&mut self, d: u32, n: u32, j: u32) {
+        let imm5 = ((j << 1) | 1) << 3;
+        self.emit(0x4e00_3c00 | (imm5 << 16) | (n << 5) | d);
     }
     /// ins vd.<sz>[i], wn
     pub fn ins_gen(&mut self, sz: Esz, d: u32, i: u32, n: u32) {

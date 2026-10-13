@@ -141,7 +141,20 @@ static gaddr_t map_anywhere_state(uint32_t size, int prot, uint32_t align, int s
         if (state == PS_LARGE) large_pages[first] = n;
     }
     pthread_mutex_unlock(&mem_lock);
+    if (!r) {
+        static int logged;
+        if (logged++ < 20)
+            LOGE("gmem: no free guest range for %u bytes (%u MB in use) - guest out of address space",
+                 size, gmem_used_pages() >> (20 - GPAGE_SHIFT));
+    }
     return r;
+}
+
+// Pages not free (mapped, heap, reserved): guest address space in use.
+uint32_t gmem_used_pages(void) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < NPAGES; i++) n += page_state[i] != PS_FREE;
+    return n;
 }
 
 gaddr_t gmem_map_anywhere(uint32_t size, int prot, uint32_t align) {

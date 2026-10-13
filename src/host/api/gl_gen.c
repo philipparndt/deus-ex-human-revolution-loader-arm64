@@ -14,7 +14,7 @@ THUNK(glBindAttribLocation) { glBindAttribLocation((GLuint)ARG(0), (GLuint)ARG(1
 // glBindBufferBase: gl_special.c (gl3.h)
 // glBindBufferRange: gl_special.c (gl3.h)
 THUNK(glBindFragDataLocation) { glBindFragDataLocation((GLuint)ARG(0), (GLuint)ARG(1), (const GLchar *)ARGP(2)); } // gl3.h
-THUNK(glBindFramebuffer) { glBindFramebuffer((GLenum)ARG(0), (GLuint)ARG(1)); } // gl3.h
+// glBindFramebuffer: gl_special.c (gl3.h)
 THUNK(glBindProgramARB) { glBindProgramARB((GLenum)ARG(0), (GLuint)ARG(1)); } // glext.h
 THUNK(glBindProgramPipeline) { glBindProgramPipeline((GLuint)ARG(0)); } // gl3.h
 THUNK(glBindRenderbuffer) { glBindRenderbuffer((GLenum)ARG(0), (GLuint)ARG(1)); } // gl3.h
@@ -27,7 +27,7 @@ THUNK(glBlendEquation) { glBlendEquation((GLenum)ARG(0)); } // gl3.h
 THUNK(glBlendEquationSeparate) { glBlendEquationSeparate((GLenum)ARG(0), (GLenum)ARG(1)); } // gl3.h
 THUNK(glBlendFunc) { glBlendFunc((GLenum)ARG(0), (GLenum)ARG(1)); } // gl3.h
 THUNK(glBlendFuncSeparate) { glBlendFuncSeparate((GLenum)ARG(0), (GLenum)ARG(1), (GLenum)ARG(2), (GLenum)ARG(3)); } // gl3.h
-THUNK(glBlitFramebuffer) { glBlitFramebuffer((GLint)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLint)ARG(5), (GLint)ARG(6), (GLint)ARG(7), (GLbitfield)ARG(8), (GLenum)ARG(9)); } // gl3.h
+// glBlitFramebuffer: gl_special.c (gl3.h)
 // glBufferData: gl_special.c (gl3.h)
 // glBufferParameteriAPPLE: gl_special.c (glext.h)
 // glBufferSubData: gl_special.c (gl3.h)
@@ -62,24 +62,24 @@ THUNK(glCompressedTexSubImage2DARB) { glCompressedTexSubImage2DARB((GLenum)ARG(0
 THUNK(glCompressedTexSubImage3D) { glCompressedTexSubImage3D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLsizei)ARG(5), (GLsizei)ARG(6), (GLsizei)ARG(7), (GLenum)ARG(8), (GLsizei)ARG(9), GLPTR_UNPACK(ARG(10))); } // gl3.h
 THUNK(glCompressedTexSubImage3DARB) { glCompressedTexSubImage3DARB((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLsizei)ARG(5), (GLsizei)ARG(6), (GLsizei)ARG(7), (GLenum)ARG(8), (GLsizei)ARG(9), GLPTR_UNPACK(ARG(10))); } // glext.h
 // glCopyBufferSubData: gl_special.c (gl3.h)
-THUNK(glCopyTexImage2D) { glCopyTexImage2D((GLenum)ARG(0), (GLint)ARG(1), (GLenum)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLsizei)ARG(5), (GLsizei)ARG(6), (GLint)ARG(7)); } // gl3.h
-THUNK(glCopyTexSubImage2D) { glCopyTexSubImage2D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLint)ARG(3), (GLint)ARG(4), (GLint)ARG(5), (GLsizei)ARG(6), (GLsizei)ARG(7)); } // gl3.h
+// glCopyTexImage2D: gl_special.c (gl3.h)
+// glCopyTexSubImage2D: gl_special.c (gl3.h)
 THUNK(glCreateProgram) { RET(glCreateProgram()); } // gl3.h
 THUNK(glCreateShader) { RET(glCreateShader((GLenum)ARG(0))); } // gl3.h
 THUNK(glCullFace) { glCullFace((GLenum)ARG(0)); } // gl3.h
 // glDeleteBuffers: gl_special.c (gl3.h)
 THUNK(glDeleteFencesAPPLE) { glDeleteFencesAPPLE((GLsizei)ARG(0), (const GLuint *)ARGP(1)); } // glext.h
-THUNK(glDeleteFramebuffers) { glDeleteFramebuffers((GLsizei)ARG(0), (const GLuint *)ARGP(1)); } // gl3.h
+// glDeleteFramebuffers: gl_special.c (gl3.h)
 THUNK(glDeleteProgram) { glDeleteProgram((GLuint)ARG(0)); } // gl3.h
 THUNK(glDeleteProgramPipelines) { glDeleteProgramPipelines((GLsizei)ARG(0), (const GLuint *)ARGP(1)); } // gl3.h
 THUNK(glDeleteProgramsARB) { glDeleteProgramsARB((GLsizei)ARG(0), (const GLuint *)ARGP(1)); } // glext.h
 THUNK(glDeleteQueries) { glDeleteQueries((GLsizei)ARG(0), (const GLuint *)ARGP(1)); } // gl3.h
-THUNK(glDeleteRenderbuffers) { glDeleteRenderbuffers((GLsizei)ARG(0), (const GLuint *)ARGP(1)); } // gl3.h
-THUNK(glDeleteRenderbuffersEXT) { glDeleteRenderbuffersEXT((GLsizei)ARG(0), (const GLuint *)ARGP(1)); } // glext.h
+// glDeleteRenderbuffers: gl_special.c (gl3.h)
+// glDeleteRenderbuffersEXT: gl_special.c (glext.h)
 THUNK(glDeleteSamplers) { glDeleteSamplers((GLsizei)ARG(0), (const GLuint *)ARGP(1)); } // gl3.h
 THUNK(glDeleteShader) { glDeleteShader((GLuint)ARG(0)); } // gl3.h
 // glDeleteSync: gl_special.c (gl3.h)
-THUNK(glDeleteTextures) { glDeleteTextures((GLsizei)ARG(0), (const GLuint *)ARGP(1)); } // gl3.h
+// glDeleteTextures: gl_special.c (gl3.h)
 // glDeleteVertexArrays: gl_special.c (gl3.h)
 THUNK(glDepthBoundsEXT) { glDepthBoundsEXT(ARGD(0), ARGD(2)); } // gl3ext.h
 THUNK(glDepthFunc) { glDepthFunc((GLenum)ARG(0)); } // gl3.h
@@ -116,10 +116,10 @@ THUNK(glFogCoordPointerEXT) { glFogCoordPointerEXT((GLenum)ARG(0), (GLsizei)ARG(
 THUNK(glFogf) { glFogf((GLenum)ARG(0), ARGF(1)); } // gl.h
 THUNK(glFogfv) { glFogfv((GLenum)ARG(0), (const GLfloat *)ARGP(1)); } // gl.h
 THUNK(glFogi) { glFogi((GLenum)ARG(0), (GLint)ARG(1)); } // gl.h
-THUNK(glFramebufferRenderbuffer) { glFramebufferRenderbuffer((GLenum)ARG(0), (GLenum)ARG(1), (GLenum)ARG(2), (GLuint)ARG(3)); } // gl3.h
-THUNK(glFramebufferTexture) { glFramebufferTexture((GLenum)ARG(0), (GLenum)ARG(1), (GLuint)ARG(2), (GLint)ARG(3)); } // gl3.h
-THUNK(glFramebufferTexture2D) { glFramebufferTexture2D((GLenum)ARG(0), (GLenum)ARG(1), (GLenum)ARG(2), (GLuint)ARG(3), (GLint)ARG(4)); } // gl3.h
-THUNK(glFramebufferTextureLayer) { glFramebufferTextureLayer((GLenum)ARG(0), (GLenum)ARG(1), (GLuint)ARG(2), (GLint)ARG(3), (GLint)ARG(4)); } // gl3.h
+// glFramebufferRenderbuffer: gl_special.c (gl3.h)
+// glFramebufferTexture: gl_special.c (gl3.h)
+// glFramebufferTexture2D: gl_special.c (gl3.h)
+// glFramebufferTextureLayer: gl_special.c (gl3.h)
 THUNK(glFrontFace) { glFrontFace((GLenum)ARG(0)); } // gl3.h
 THUNK(glGenBuffers) { glGenBuffers((GLsizei)ARG(0), (GLuint *)ARGP(1)); } // gl3.h
 THUNK(glGenFencesAPPLE) { glGenFencesAPPLE((GLsizei)ARG(0), (GLuint *)ARGP(1)); } // glext.h
@@ -149,7 +149,7 @@ THUNK(glGetError) { RET(glGetError()); } // gl3.h
 THUNK(glGetFloatv) { glGetFloatv((GLenum)ARG(0), (GLfloat *)ARGP(1)); } // gl3.h
 THUNK(glGetInteger64v) { glGetInteger64v((GLenum)ARG(0), (GLint64 *)ARGP(1)); } // gl3.h, extra
 THUNK(glGetIntegeri_v) { glGetIntegeri_v((GLenum)ARG(0), (GLuint)ARG(1), (GLint *)ARGP(2)); } // gl3.h, extra
-THUNK(glGetIntegerv) { glGetIntegerv((GLenum)ARG(0), (GLint *)ARGP(1)); } // gl3.h
+// glGetIntegerv: gl_special.c (gl3.h)
 THUNK(glGetObjectParameterivAPPLE) { glGetObjectParameterivAPPLE((GLenum)ARG(0), (GLuint)ARG(1), (GLenum)ARG(2), (GLint *)ARGP(3)); } // gl3ext.h
 // glGetPointerv: gl_special.c (gl.h, extra)
 THUNK(glGetProgramInfoLog) { glGetProgramInfoLog((GLuint)ARG(0), (GLsizei)ARG(1), (GLsizei *)ARGP(2), (GLchar *)ARGP(3)); } // gl3.h
@@ -207,7 +207,7 @@ THUNK(glPrioritizeTextures) { glPrioritizeTextures((GLsizei)ARG(0), (const GLuin
 THUNK(glProgramEnvParameter4fvARB) { glProgramEnvParameter4fvARB((GLenum)ARG(0), (GLuint)ARG(1), (const GLfloat *)ARGP(2)); } // glext.h
 THUNK(glProgramLocalParameters4fvEXT) { glProgramLocalParameters4fvEXT((GLenum)ARG(0), (GLuint)ARG(1), (GLsizei)ARG(2), (const GLfloat *)ARGP(3)); } // glext.h
 THUNK(glProgramParameteri) { glProgramParameteri((GLuint)ARG(0), (GLenum)ARG(1), (GLint)ARG(2)); } // gl3.h
-THUNK(glProgramStringARB) { glProgramStringARB((GLenum)ARG(0), (GLenum)ARG(1), (GLsizei)ARG(2), ARGP(3)); } // glext.h
+// glProgramStringARB: gl_special.c (glext.h)
 THUNK(glProgramUniform1i) { glProgramUniform1i((GLuint)ARG(0), (GLint)ARG(1), (GLint)ARG(2)); } // gl3.h
 THUNK(glProgramUniform1iv) { glProgramUniform1iv((GLuint)ARG(0), (GLint)ARG(1), (GLsizei)ARG(2), (const GLint *)ARGP(3)); } // gl3.h
 THUNK(glProgramUniform4fv) { glProgramUniform4fv((GLuint)ARG(0), (GLint)ARG(1), (GLsizei)ARG(2), (const GLfloat *)ARGP(3)); } // gl3.h
@@ -216,17 +216,17 @@ THUNK(glProvokingVertexEXT) { glProvokingVertexEXT((GLenum)ARG(0)); } // glext.h
 THUNK(glPushMatrix) { glPushMatrix(); } // gl.h
 THUNK(glQueryCounter) { glQueryCounter((GLuint)ARG(0), (GLenum)ARG(1)); } // gl3.h
 THUNK(glReadBuffer) { glReadBuffer((GLenum)ARG(0)); } // gl3.h
-THUNK(glReadPixels) { glReadPixels((GLint)ARG(0), (GLint)ARG(1), (GLsizei)ARG(2), (GLsizei)ARG(3), (GLenum)ARG(4), (GLenum)ARG(5), GLPTR_PACK(ARG(6))); } // gl3.h
-THUNK(glRenderbufferStorage) { glRenderbufferStorage((GLenum)ARG(0), (GLenum)ARG(1), (GLsizei)ARG(2), (GLsizei)ARG(3)); } // gl3.h
-THUNK(glRenderbufferStorageEXT) { glRenderbufferStorageEXT((GLenum)ARG(0), (GLenum)ARG(1), (GLsizei)ARG(2), (GLsizei)ARG(3)); } // glext.h
-THUNK(glRenderbufferStorageMultisample) { glRenderbufferStorageMultisample((GLenum)ARG(0), (GLsizei)ARG(1), (GLenum)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4)); } // gl3.h
-THUNK(glRenderbufferStorageMultisampleEXT) { glRenderbufferStorageMultisampleEXT((GLenum)ARG(0), (GLsizei)ARG(1), (GLenum)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4)); } // glext.h
+// glReadPixels: gl_special.c (gl3.h)
+// glRenderbufferStorage: gl_special.c (gl3.h)
+// glRenderbufferStorageEXT: gl_special.c (glext.h)
+// glRenderbufferStorageMultisample: gl_special.c (gl3.h)
+// glRenderbufferStorageMultisampleEXT: gl_special.c (glext.h)
 THUNK(glSampleMaski) { glSampleMaski((GLuint)ARG(0), (GLbitfield)ARG(1)); } // gl3.h
 THUNK(glSamplerParameterf) { glSamplerParameterf((GLuint)ARG(0), (GLenum)ARG(1), ARGF(2)); } // gl3.h
 THUNK(glSamplerParameterfv) { glSamplerParameterfv((GLuint)ARG(0), (GLenum)ARG(1), (const GLfloat *)ARGP(2)); } // gl3.h
 THUNK(glSamplerParameteri) { glSamplerParameteri((GLuint)ARG(0), (GLenum)ARG(1), (GLint)ARG(2)); } // gl3.h
 THUNK(glScalef) { glScalef(ARGF(0), ARGF(1), ARGF(2)); } // gl.h
-THUNK(glScissor) { glScissor((GLint)ARG(0), (GLint)ARG(1), (GLsizei)ARG(2), (GLsizei)ARG(3)); } // gl3.h
+// glScissor: gl_special.c (gl3.h)
 THUNK(glSecondaryColor3fvEXT) { glSecondaryColor3fvEXT((const GLfloat *)ARGP(0)); } // glext.h
 THUNK(glSecondaryColorPointerEXT) { glSecondaryColorPointerEXT((GLint)ARG(0), (GLenum)ARG(1), (GLsizei)ARG(2), GLPTR_ARRAY(ARG(3))); } // glext.h
 THUNK(glSetFenceAPPLE) { glSetFenceAPPLE((GLuint)ARG(0)); } // glext.h
@@ -244,15 +244,15 @@ THUNK(glTexEnvfv) { glTexEnvfv((GLenum)ARG(0), (GLenum)ARG(1), (const GLfloat *)
 THUNK(glTexGenfv) { glTexGenfv((GLenum)ARG(0), (GLenum)ARG(1), (const GLfloat *)ARGP(2)); } // gl.h
 THUNK(glTexGeni) { glTexGeni((GLenum)ARG(0), (GLenum)ARG(1), (GLint)ARG(2)); } // gl.h
 THUNK(glTexImage1D) { glTexImage1D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLsizei)ARG(3), (GLint)ARG(4), (GLenum)ARG(5), (GLenum)ARG(6), GLPTR_UNPACK(ARG(7))); } // gl3.h
-THUNK(glTexImage2D) { glTexImage2D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4), (GLint)ARG(5), (GLenum)ARG(6), (GLenum)ARG(7), GLPTR_UNPACK(ARG(8))); } // gl3.h
-THUNK(glTexImage2DMultisample) { glTexImage2DMultisample((GLenum)ARG(0), (GLsizei)ARG(1), (GLint)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4), (GLboolean)ARG(5)); } // gl3.h
+// glTexImage2D: gl_special.c (gl3.h)
+// glTexImage2DMultisample: gl_special.c (gl3.h)
 THUNK(glTexImage3D) { glTexImage3D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4), (GLsizei)ARG(5), (GLint)ARG(6), (GLenum)ARG(7), (GLenum)ARG(8), GLPTR_UNPACK(ARG(9))); } // gl3.h
 THUNK(glTexImage3DMultisample) { glTexImage3DMultisample((GLenum)ARG(0), (GLsizei)ARG(1), (GLint)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4), (GLsizei)ARG(5), (GLboolean)ARG(6)); } // gl3.h
 THUNK(glTexParameterf) { glTexParameterf((GLenum)ARG(0), (GLenum)ARG(1), ARGF(2)); } // gl3.h
 THUNK(glTexParameterfv) { glTexParameterfv((GLenum)ARG(0), (GLenum)ARG(1), (const GLfloat *)ARGP(2)); } // gl3.h
 THUNK(glTexParameteri) { glTexParameteri((GLenum)ARG(0), (GLenum)ARG(1), (GLint)ARG(2)); } // gl3.h, extra
 THUNK(glTexStorage1D) { glTexStorage1D((GLenum)ARG(0), (GLsizei)ARG(1), (GLenum)ARG(2), (GLsizei)ARG(3)); } // gl3ext.h
-THUNK(glTexStorage2D) { glTexStorage2D((GLenum)ARG(0), (GLsizei)ARG(1), (GLenum)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4)); } // gl3ext.h
+// glTexStorage2D: gl_special.c (gl3ext.h)
 THUNK(glTexStorage3D) { glTexStorage3D((GLenum)ARG(0), (GLsizei)ARG(1), (GLenum)ARG(2), (GLsizei)ARG(3), (GLsizei)ARG(4), (GLsizei)ARG(5)); } // gl3ext.h
 THUNK(glTexSubImage1D) { glTexSubImage1D((GLenum)ARG(0), (GLint)ARG(1), (GLint)ARG(2), (GLsizei)ARG(3), (GLenum)ARG(4), (GLenum)ARG(5), GLPTR_UNPACK(ARG(6))); } // gl3.h
 // glTexSubImage2D: gl_special.c (gl3.h)
@@ -278,5 +278,5 @@ THUNK(glVertexAttribIPointer) { glVertexAttribIPointer((GLuint)ARG(0), (GLint)AR
 THUNK(glVertexAttribPointer) { glVertexAttribPointer((GLuint)ARG(0), (GLint)ARG(1), (GLenum)ARG(2), (GLboolean)ARG(3), (GLsizei)ARG(4), GLPTR_ARRAY(ARG(5))); } // gl3.h
 THUNK(glVertexBlendARB) { glVertexBlendARB((GLint)ARG(0)); } // glext.h
 THUNK(glVertexPointer) { glVertexPointer((GLint)ARG(0), (GLenum)ARG(1), (GLsizei)ARG(2), GLPTR_ARRAY(ARG(3))); } // gl.h
-THUNK(glViewport) { glViewport((GLint)ARG(0), (GLint)ARG(1), (GLsizei)ARG(2), (GLsizei)ARG(3)); } // gl3.h
+// glViewport: gl_special.c (gl3.h)
 // glWaitSync: gl_special.c (gl3.h, extra)

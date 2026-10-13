@@ -44,6 +44,18 @@ struct glmap {
     bool virt;          // no driver mapping: written ranges are uploaded (see glMapBuffer)
     bool undefined;     // virt: contents were undefined at map time (orphaned buffer)
     GLenum usage;       // virt: buffer usage, to re-specify the storage with the data
+    bool persistent;    // guest memory is the buffer's persistent shadow (kept at unmap)
+};
+
+struct bufmeta {
+    uint32_t size;
+    GLenum usage; // 0 = unknown
+};
+
+// Persistent CPU copy of a buffer's contents (see glMapBuffer in gl_special.c).
+struct bufshadow {
+    gaddr_t g;     // 0 = none
+    uint32_t size;
 };
 
 struct glstr {
@@ -62,9 +74,26 @@ struct glctx {
     uint8_t *buf_noflush; // per buffer name: BUF_* flags
     uint32_t buf_noflush_cap;
     struct glmap maps[16];
+    struct bufshadow *shadow; // per buffer name
+    uint32_t shadow_cap;
+    struct bufmeta *meta; // per buffer name: size / usage from glBufferData (no driver queries)
+    uint32_t meta_cap;
     struct glstr *strs;
     uint32_t nstrs, strs_cap;
+    // render scale (gl_scale.c): framebuffer bindings and which FBOs are scaled
+    GLuint draw_fbo, read_fbo;
+    GLint vp[4], sc[4]; // logical viewport / scissor (re-applied when the draw target changes scale)
+    bool vp_set, sc_set, applied_scaled;
+    int fp_env_k; // render-scale factor last written to the fragment.position env slot (0 = never)
+    uint8_t *fbo_scaled;
+    uint32_t fbo_scaled_cap;
+    GLuint scale_tmp_fbo;
 };
+
+// gl_scale.c (DXH_RENDER_SCALE)
+void gl_scale_backing(GLint *wh);      // CGLSetParameter(kCGLCPSurfaceBackingSize): logical -> real
+void gl_scale_backing_back(GLint *wh); // CGLGetParameter: real -> logical
+void gl_scale_tex_upload(GLenum target); // glTexSubImage2D: data into a scaled texture
 
 struct glctx *gl_ctx_lookup(CGLContextObj c); // creates on first use
 void gl_ctx_forget(CGLContextObj c);         // call when a context is destroyed

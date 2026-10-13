@@ -50,6 +50,7 @@ bool gmem_map_fixed(gaddr_t addr, uint32_t size, int prot);
 // Map zero-filled memory anywhere; returns 0 on failure. align must be a power of
 // two >= GPAGE_SIZE (or 0 for page alignment).
 gaddr_t gmem_map_anywhere(uint32_t size, int prot, uint32_t align);
+uint32_t gmem_used_pages(void); // guest address space in use, in GPAGE_SIZE pages
 void gmem_unmap(gaddr_t addr, uint32_t size);
 bool gmem_protect(gaddr_t addr, uint32_t size, int prot);
 bool gmem_is_mapped(gaddr_t addr, uint32_t size);

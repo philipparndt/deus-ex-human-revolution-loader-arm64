@@ -37,8 +37,8 @@ Work in progress, but the game is playable:
 
 Known issues: frame drops while the game streams in new areas (driver stalls
 on its worker GL contexts), rendering at the "looks like" resolution of a
-Retina display (no native 4K yet), antialiasing options unverified, and the
-native core does not order memory like x86 unless `DXCPU_TSO=1` is set.
+Retina display (no native 4K yet), and antialiasing options unverified. x86 memory
+ordering costs about 11% frame rate (without it the game crashes on level loads).
 
 ## How it works
 
@@ -91,11 +91,29 @@ Native CPU core (`build/arm64-dxcpu`):
 
 | Variable | Effect |
 | --- | --- |
-| `DXCPU_TSO=1` | x86 memory ordering (barriers around guest loads/stores, stack excepted): rules out the reordering `tests/guest/litmus.c` shows, ~10% slower |
+| `DXCPU_TSO=0` | turn off x86 memory ordering (on by default: barriers around guest loads/stores, stack and `[ebp-x]` locals excepted). Faster by ~11%, but HR then crashes in its job system on about every other level load; `tests/guest/litmus.c` shows the reordering. `DXCPU_TSO=rcpc` uses ldapr/stlr instead of barriers (not faster on M-series), `DXCPU_TSO_EBP=0` keeps barriers on `[ebp-x]` |
 | `DXCPU_STATS=10` | every 10 s: dispatcher entries and the most interpreted instructions; `DXCPU_STATS_ADDR=Mnemonic` adds the addresses |
 | `DXCPU_VERIFY=1` | run every block in the interpreter as well and report blocks whose results differ (slow; shared-memory races show up as noise) |
 | `DXCPU_JIT_OFF=sse,fast,int,x87,all,m:Add+Shl` | interpret selected instruction groups (bisecting translation bugs) |
 | `DXCPU_INTERP=1` | interpreter only |
+
+## Unattended play testing
+
+`DXH_AUTOPLAY=<script>` lets a bot drive the game: synthetic keyboard/mouse
+input (the real cursor is never grabbed, real input is ignored), screenshots of
+the presented frames and a hang watchdog. Scripts are plain text, see
+`src/host/api/autoplay.m` for the commands and `tools/autoplay/` for examples
+(`load.txt`: launcher, continue the last save, play randomly, quit).
+
+```sh
+tools/autoplay.sh tools/autoplay/load.txt 10 8 autoplay-out/run1   # 10 runs, 8 min each
+```
+
+`tools/autoplay.sh` sorts every run into ok / crash / hang / timeout, keeps the
+log and screenshots per run and writes `summary.txt`. It backs up the Steam save
+folder and the launcher preferences first and restores them after each run.
+Further environment (e.g. `DXCPU_TSO=0`, `DXH_HOST=build/dev/dxhost`) is passed
+through, which makes A/B comparisons a loop over two settings.
 
 ## Tests
 

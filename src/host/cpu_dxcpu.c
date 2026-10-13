@@ -75,6 +75,8 @@ static void dump_guest_frames(gaddr_t esp, gaddr_t ebp, const char *indent) {
     }
 }
 
+void cpu_dump_guest_threads(void);
+
 static void *watchdog_thread(void *arg) {
     bool dumped = false;
     for (;;) {
@@ -88,6 +90,14 @@ static void *watchdog_thread(void *arg) {
         if (dumped) continue;
         dumped = true;
         LOGE("watchdog: main thread silent for %.1f s, guest threads:", (now - beat) / 1e9);
+        cpu_dump_guest_threads();
+    }
+    return arg;
+}
+
+// Log every guest thread's current host call and guest frames (watchdog, autoplay hangs).
+void cpu_dump_guest_threads(void) {
+    {
         pthread_mutex_lock(&all_lock);
         for (struct dthread *t = all_threads; t; t = t->next) {
             char name[64] = "";
@@ -104,7 +114,6 @@ static void *watchdog_thread(void *arg) {
         }
         pthread_mutex_unlock(&all_lock);
     }
-    return arg;
 }
 
 static void ensure_depth(int depth) {

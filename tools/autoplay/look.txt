@@ -1,0 +1,17 @@
+# Mouse look check: load, leave cover, turn for 20 s (host call statistics show what the game reads).
+wait 15
+key return
+wait 50
+key return
+wait 10
+key return
+wait 10
+key return
+wait 100
+key space 1
+shot before
+repeat 20
+look 400 0 1
+end
+shot after
+quit

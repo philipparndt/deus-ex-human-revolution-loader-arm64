@@ -219,6 +219,36 @@ int main(void) {
     }
     check_gl("buffers");
 
+    // Repeated whole-buffer glMapBuffer of a buffer in use (the host keeps a
+    // persistent shadow after the first map): partial writes keep the other
+    // bytes, glBufferSubData in between is seen by later maps.
+    {
+        GLuint sb;
+        unsigned char init[256], back[256];
+        for (int i = 0; i < 256; i++) init[i] = (unsigned char)i;
+        glGenBuffers(1, &sb);
+        glBindBuffer(GL_ARRAY_BUFFER, sb);
+        glBufferData(GL_ARRAY_BUFFER, sizeof init, init, GL_DYNAMIC_DRAW);
+        for (int round = 0; round < 3; round++) {
+            unsigned char *w = glMapBuffer(GL_ARRAY_BUFFER, round == 2 ? GL_READ_WRITE : GL_WRITE_ONLY);
+            CHECK(w != NULL, "glMapBuffer (shadow round)");
+            if (!w) break;
+            if (round == 2) CHECK(w[0] == 100 && w[1] == 101 && w[50] == 7 && w[51] == 51 && w[200] == 200, "read-write map sees contents");
+            w[round] = (unsigned char)(100 + round);
+            CHECK(glUnmapBuffer(GL_ARRAY_BUFFER) == GL_TRUE, "glUnmapBuffer (shadow round)");
+            if (round == 0) {
+                unsigned char v = 7;
+                glBufferSubData(GL_ARRAY_BUFFER, 50, 1, &v);
+            }
+        }
+        glGetBufferSubData(GL_ARRAY_BUFFER, 0, sizeof back, back);
+        CHECK(back[0] == 100 && back[1] == 101 && back[2] == 102 && back[50] == 7 && back[3] == 3 && back[255] == 255,
+              "buffer contents after shadowed maps");
+        glBindBuffer(GL_ARRAY_BUFFER, vbo[1]);
+        glDeleteBuffers(1, &sb);
+        check_gl("shadowed maps");
+    }
+
     const GLushort idx[] = {0xdead, 0xbeef, 0, 1, 2, 0, 2, 3};
     glGenBuffers(1, &ebo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
