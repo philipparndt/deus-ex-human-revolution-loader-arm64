@@ -1,0 +1,54 @@
+# Finds the player's position in guest memory (scan commands, see memscan.c):
+# floats that stay put while standing or turning, change while walking and come
+# back when the walk is undone. Result: memscan lines in the log and pos.txt.
+# launcher skipped by autoplay.sh; Return skips the intro videos
+wait 15
+key return
+wait 35
+key return
+wait 10
+key return
+wait 10
+key return
+wait 40
+# the save starts in cover: right click leaves it
+click right
+wait 2
+shot uncovered
+scan start
+wait 1
+scan same
+wait 1
+scan same
+key w 2
+wait 1
+scan changed
+wait 1
+scan same
+look 400 0 0.5
+wait 1
+scan same
+look -400 0 0.5
+wait 1
+scan same
+scan mark
+key s 2
+wait 1
+scan update
+wait 1
+scan same
+key w 2
+wait 1
+scan back
+scan mark
+key d 1.5
+wait 1
+scan update
+wait 1
+scan same
+key a 1.5
+wait 1
+scan back
+shot found
+scan report 80 pos.txt
+quit

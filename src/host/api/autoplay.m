@@ -130,6 +130,11 @@ static void key_event(unsigned short code, bool down) {
           CGEventSetFlags(ce, (CGEventFlags)cb_bot_flags);
           NSEvent *e = [NSEvent eventWithCGEvent:ce];
           CFRelease(ce);
+          if (getenv("DXH_BOT_TRACE")) {
+              CBWindow *kw = cb_key_window();
+              LOGI("bot-trace: key %u %s, app active %d, NS key window %p, target window %#x", code, down ? "down" : "up",
+                   NSApp.isActive, NSApp.keyWindow, kw ? cb_handle(kw) : 0);
+          }
           if (e) cb_bot_inject(e, 0, 0);
       }
     });
@@ -446,6 +451,15 @@ static void run(char **lines, int n) {
             if (!depth) continue;
             if (stack[depth - 1].left == 0 || --stack[depth - 1].left > 0) pc = stack[depth - 1].pc;
             else depth--;
+        } else if (!strcmp(cmd, "scan")) {
+            extern void memscan_command(const char *what, const char *arg, const char *file); // memscan.c
+            char file[1024] = "";
+            if (got > 3) snprintf(file, sizeof file, "%s/%s", out_dir, c);
+            memscan_command(a, got > 2 ? b : "", file);
+        } else if (!strcmp(cmd, "activate")) { // bring the game to the front, as a watching player does
+            cb_on_main(^{
+              [NSApp activateIgnoringOtherApps:YES];
+            });
         } else if (!strcmp(cmd, "quit")) {
             LOGI("bot: quit");
             _exit(0);

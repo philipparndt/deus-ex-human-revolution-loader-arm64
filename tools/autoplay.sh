@@ -43,6 +43,9 @@ for ((i = 1; i <= RUNS; i++)); do
     RUN=$(printf "%s/run-%03d" "$OUT" "$i")
     mkdir -p "$RUN"
     SEED=${DXH_AUTOPLAY_SEED:-$((RANDOM * 32768 + RANDOM))}
+    # skip Feral's launcher (it sometimes ignored the bot's Return); the
+    # player's preferences come back from the backup after the run
+    [ -f "$PREFS" ] && sed -i.bak 's/"GameOptionsDialogShouldShow" type="integer">1/"GameOptionsDialogShouldShow" type="integer">0/' "$PREFS" && rm -f "$PREFS.bak"
     START=$(date +%s)
     echo "run $i: seed $SEED, $(date +%H:%M:%S)"
     DXH_AUTOPLAY="$SCRIPT" DXH_AUTOPLAY_OUT="$RUN" DXH_AUTOPLAY_SEED=$SEED \

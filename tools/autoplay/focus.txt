@@ -1,0 +1,16 @@
+# Focus check: do the bot's keys reach the main menu while the game is the
+# front app (as when someone watches)? Intro -> menu -> activate -> Return.
+wait 15
+key return
+wait 35
+key return
+wait 10
+shot menu-inactive
+activate
+wait 3
+key down
+wait 1
+key return
+wait 15
+shot after-return-active
+quit

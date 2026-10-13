@@ -103,7 +103,7 @@ Native CPU core (`build/arm64-dxcpu`):
 input (the real cursor is never grabbed, real input is ignored), screenshots of
 the presented frames and a hang watchdog. Scripts are plain text, see
 `src/host/api/autoplay.m` for the commands and `tools/autoplay/` for examples
-(`load.txt`: launcher, continue the last save, play randomly, quit).
+(`load.txt`: continue the last save, play randomly, quit).
 
 ```sh
 tools/autoplay.sh tools/autoplay/load.txt 10 8 autoplay-out/run1   # 10 runs, 8 min each
@@ -114,6 +114,13 @@ log and screenshots per run and writes `summary.txt`. It backs up the Steam save
 folder and the launcher preferences first and restores them after each run.
 Further environment (e.g. `DXCPU_TSO=0`, `DXH_HOST=build/dev/dxhost`) is passed
 through, which makes A/B comparisons a loop over two settings.
+The launcher is skipped during bot runs.
+
+`scan` commands search guest memory for game state the way a cheat tool does,
+with the bot doing the moving (`src/host/api/memscan.c`;
+`tools/autoplay/findpos.txt` is a first attempt at the player position).
+Known issue: the main menu sometimes ignores the bot's keys, so a run can stay
+there.
 
 ## Tests
 

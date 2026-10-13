@@ -1512,6 +1512,11 @@ static void app_notifications(void) {
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc addObserverForName:NSApplicationDidBecomeActiveNotification object:nil queue:nil
                 usingBlock:^(NSNotification *n) {
+                  // Autoplay hides deactivation from the game, so it must not see
+                  // the activation either: Feral's reactivation (re-showing its
+                  // windows, fullscreen setup) after a deactivation it never got
+                  // left a black window and a menu that ignored the bot's keys.
+                  if (cb_bot) return;
                   LOGD("carbon: app activated");
                   cb_app_active = 1;
                   send_app_event(kEventAppActivated);
