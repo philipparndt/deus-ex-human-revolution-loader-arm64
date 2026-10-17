@@ -1866,8 +1866,9 @@ impl Translator {
             Some(f) if f.kind == K_SUB => self.a.cset_w(FC, Cond::Lo),
             Some(f) if f.kind == K_ADD => self.a.cset_w(FC, Cond::Hs),
             Some(f) if f.kind == K_LOGIC => self.a.mov_w_imm(FC, 0),
-            Some(f) if f.kind == K_INC || f.kind == K_DEC => {} // FC already holds CF
             Some(f) if f.kind == K_FCMP => self.a.cset_w(FC, Cond::Lt),
+            // inc/dec, adc/sbb and shifts leave CF in FC (as for flush_flags)
+            Some(_) => {}
             _ if self.fc_cf => {}
             // flags in ctx: CF is eflags bit 0 if materialised, else ctx.fcf (see flush_flags)
             _ => self.load_cf_from_ctx(),
