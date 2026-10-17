@@ -135,8 +135,11 @@ comma := ,
 # rendered at RENDER_SCALE times that, the HUD keeps its 1080p layout.
 RENDER_SCALE ?= 2
 
+# offline: play without the Steam client (make run STEAM=online uses it)
+STEAM ?= offline
+
 run: native-dxcpu
-	DXH_RENDER_SCALE=$(RENDER_SCALE) $(DXCPU_DIR)/dxhost "$(HR_APP)"
+	DXH_STEAM=$(STEAM) DXH_RENDER_SCALE=$(RENDER_SCALE) $(DXCPU_DIR)/dxhost "$(HR_APP)"
 
 run-rosetta: $(ROSETTA_DIR)/dxhost
 	$(ROSETTA_DIR)/dxhost "$(HR_APP)"

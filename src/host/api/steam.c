@@ -1,6 +1,7 @@
 // Steam bridge: replaces the game's i386 libsteam_api.dylib (Steamworks SDK
 // ~1.19/1.20, 2012) with host thunks that talk to the real, running Steam
-// client through the host-architecture steamclient.dylib.
+// client through the host-architecture steamclient.dylib, or answer locally
+// when Steam is not running (offline mode, see below).
 //
 // - dlopen("…/libsteam_api.dylib") is redirected by dyld.c to a host pseudo
 //   handle, so dlsym() finds the _SteamAPI_* / _Steam* thunks below.
@@ -37,7 +38,10 @@
 
 #include <dlfcn.h>
 #include <ffi/ffi.h>
+#include <dirent.h>
 #include <limits.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -294,6 +298,8 @@ struct mref {
 };
 
 static void method_thunk(struct guest_regs *r);
+static bool offline;
+static void offline_method(struct guest_regs *r, const struct mref *ref);
 
 static gaddr_t iface_vtable(struct siface *f) {
     if (f->vtable) return f->vtable;
@@ -444,9 +450,10 @@ static void method_thunk(struct guest_regs *r) {
     if (!ref->seen) {
         ref->seen = true;
         LOGI("steam: first call %s (vtable index %d)%s", ref->name, ref->idx,
-             m->sig || m->custom ? "" : " - NOT BRIDGED, returning 0");
+             offline ? " (offline)" : m->sig || m->custom ? "" : " - NOT BRIDGED, returning 0");
     }
     LOGT("steam: %s", ref->name);
+    if (offline) return offline_method(r, ref);
     if (m->custom) return m->custom(r, host, ref->idx);
     if (!m->sig) {
         LOGD("steam: unbridged %s called, returning 0", ref->name);
@@ -806,19 +813,320 @@ static void run_callbacks(HSteamPipe pipe, bool server) {
     running = false;
 }
 
+// --- offline mode -------------------------------------------------------------------
+//
+// Without a running Steam client (or with DXH_STEAM=offline) the interfaces are
+// answered here: the game owns itself, the user is the one whose Steam folder
+// holds the game's saves, and ISteamRemoteStorage reads and writes that same
+// folder (userdata/<account>/<appid>/remote), so saves carry over in both
+// directions. Achievements and stats are only logged.
+
+static uint32_t off_account, off_appid;
+static char off_persona[128] = "Player";
+static char off_remote[PATH_MAX];
+
+#define STEAMID64_BASE 76561197960265728ull
+
+static struct offcb {
+    int icb;
+    uint8_t data[64];
+    int size;
+} off_queue[16];
+static int off_nqueue;
+
+static void off_post(int icb, const void *data, int size) {
+    pthread_mutex_lock(&steam_lock);
+    if (off_nqueue < 16) {
+        off_queue[off_nqueue].icb = icb;
+        memcpy(off_queue[off_nqueue].data, data, (size_t)size);
+        off_queue[off_nqueue].size = size;
+        off_nqueue++;
+    }
+    pthread_mutex_unlock(&steam_lock);
+}
+
+static void off_user_dir(char *out, size_t cap, uint32_t account) {
+    char base[PATH_MAX];
+    steam_dir(base, sizeof base);
+    snprintf(out, cap, "%s/userdata/%u/%u", base, account, off_appid);
+}
+
+// The account whose userdata folder has this game (the most recent login if
+// it has one), and its persona name from loginusers.vdf.
+static void off_find_user(void) {
+    char base[PATH_MAX], path[PATH_MAX], line[512];
+    steam_dir(base, sizeof base);
+    struct {
+        uint32_t account;
+        char name[128];
+        bool recent;
+    } users[16];
+    int n = -1;
+    snprintf(path, sizeof path, "%s/config/loginusers.vdf", base);
+    FILE *f = fopen(path, "r");
+    while (f && fgets(line, sizeof line, f)) {
+        char *p = line + strspn(line, " \t");
+        unsigned long long id = *p == '"' ? strtoull(p + 1, NULL, 10) : 0;
+        if (id > STEAMID64_BASE && n < 15) {
+            n++;
+            users[n].account = (uint32_t)(id - STEAMID64_BASE), users[n].name[0] = 0, users[n].recent = false;
+            continue;
+        }
+        if (n < 0) continue;
+        char *k = strstr(line, "\"PersonaName\""), *e;
+        if (k && (k = strchr(k + 13, '"')) && (e = strchr(k + 1, '"')) && (size_t)(e - k - 1) < sizeof users[n].name) {
+            memcpy(users[n].name, k + 1, (size_t)(e - k - 1));
+            users[n].name[e - k - 1] = 0;
+        }
+        if ((k = strstr(line, "\"MostRecent\"")) && strstr(k + 12, "\"1\"")) users[n].recent = true;
+    }
+    if (f) fclose(f);
+    for (int pass = 0; pass < 2 && !off_account; pass++)
+        for (int i = 0; i <= n && !off_account; i++) {
+            off_user_dir(path, sizeof path, users[i].account);
+            if ((pass || users[i].recent) && access(path, F_OK) == 0) off_account = users[i].account;
+        }
+    if (!off_account) { // any account folder that has the game
+        snprintf(path, sizeof path, "%s/userdata", base);
+        DIR *d = opendir(path);
+        struct dirent *e;
+        while (d && (e = readdir(d)) && !off_account) {
+            char p2[PATH_MAX];
+            off_user_dir(p2, sizeof p2, (uint32_t)strtoul(e->d_name, NULL, 10));
+            if (e->d_name[0] != '.' && access(p2, F_OK) == 0) off_account = (uint32_t)strtoul(e->d_name, NULL, 10);
+        }
+        if (d) closedir(d);
+    }
+    if (!off_account) off_account = 1;
+    for (int i = 0; i <= n; i++)
+        if (users[i].account == off_account && users[i].name[0]) strlcpy(off_persona, users[i].name, sizeof off_persona);
+    off_user_dir(path, sizeof path, off_account);
+    snprintf(off_remote, sizeof off_remote, "%s/remote", path);
+}
+
+static bool steam_init_offline(void) {
+    if (offline) return true;
+    ensure_appid();
+    off_appid = (uint32_t)strtoul(getenv("SteamAppId"), NULL, 10);
+    off_find_user();
+    offline = true;
+    hpipe = 1, huser = 1;
+    // Offline proxies: the method table itself stands in for the host interface.
+    g_client = wrap_iface(&ifaces[0], "SteamClient012");
+    g_user = wrap_iface(&ifaces[1], "SteamUser016");
+    g_friends = wrap_iface(&ifaces[2], "SteamFriends013");
+    g_utils = wrap_iface(&ifaces[3], "SteamUtils005");
+    g_mm = wrap_iface(&ifaces[4], "SteamMatchMaking009");
+    g_mms = wrap_iface(&ifaces[5], "SteamMatchMakingServers002");
+    g_stats = wrap_iface(&ifaces[6], "STEAMUSERSTATS_INTERFACE_VERSION011");
+    g_apps = wrap_iface(&ifaces[7], "STEAMAPPS_INTERFACE_VERSION005");
+    g_net = wrap_iface(&ifaces[8], "SteamNetworking005");
+    g_rs = wrap_iface(&ifaces[9], "STEAMREMOTESTORAGE_INTERFACE_VERSION010");
+    g_shots = wrap_iface(&ifaces[10], "STEAMSCREENSHOTS_INTERFACE_VERSION001");
+    g_http = wrap_iface(&ifaces[11], "STEAMHTTP_INTERFACE_VERSION002");
+    LOGI("steam: offline mode (no Steam client): app %u, account %u (%s), saves in %s", off_appid, off_account,
+         off_persona, off_remote);
+    return true;
+}
+
+// A save file name inside the remote folder; NULL for names that would leave it.
+static const char *off_path(gaddr_t gname, char *out, size_t cap) {
+    const char *n = gname ? g2h(gname) : NULL;
+    if (!n || !*n || n[0] == '/' || strstr(n, "..")) return NULL;
+    snprintf(out, cap, "%s/%s", off_remote, n);
+    return out;
+}
+
+static void mkdirs_for(const char *file) {
+    char p[PATH_MAX];
+    strlcpy(p, file, sizeof p);
+    for (char *s = p + 1; *s; s++)
+        if (*s == '/') {
+            *s = 0;
+            mkdir(p, 0755);
+            *s = '/';
+        }
+}
+
+// Regular files of the remote folder (top level), sorted: GetFileCount/GetFileNameAndSize.
+static int off_list(char names[][128], int max) {
+    DIR *d = opendir(off_remote);
+    int n = 0;
+    struct dirent *e;
+    while (d && (e = readdir(d)) && n < max)
+        if (e->d_name[0] != '.' && e->d_type == DT_REG) strlcpy(names[n++], e->d_name, 128);
+    if (d) closedir(d);
+    qsort(names, (size_t)n, 128, (int (*)(const void *, const void *))strcmp);
+    return n;
+}
+
+// Guest stack slot of the version string of an interface getter ('s' in sig).
+static int sig_string_slot(const char *sig) {
+    int slot = 1;
+    for (const char *a = sig + 2; *a; a++) {
+        if (*a == 's') return slot;
+        slot += *a == 'q' || *a == 'd' ? 2 : 1;
+    }
+    return 0;
+}
+
+#define IS(n) (strcmp(m, n) == 0)
+
+static void offline_method(struct guest_regs *r, const struct mref *ref) {
+    const struct smethod *meth = &ref->iface->methods[ref->idx];
+    const char *iface = ref->iface->short_name, *m = meth->name;
+    char path[PATH_MAX];
+    if (!strcmp(iface, "ISteamClient")) {
+        if (meth->sig && meth->sig[0] == 'P') {
+            const char *v = g2h(ARG(sig_string_slot(meth->sig)));
+            struct siface *f = v ? iface_by_version(v) : NULL;
+            RET(f ? wrap_iface(f, v) : 0);
+        }
+        if (IS("CreateSteamPipe") || IS("ConnectToGlobalUser") || IS("BReleaseSteamPipe") ||
+            IS("BShutdownIfAllPipesClosed"))
+            RET(1);
+    } else if (!strcmp(iface, "ISteamUser")) {
+        if (IS("GetHSteamUser") || IS("BLoggedOn")) RET(1);
+        if (IS("GetSteamID")) RET64(STEAMID64_BASE + off_account);
+        if (IS("GetUserDataFolder")) {
+            snprintf(path, sizeof path, "%.*s/local", (int)(strrchr(off_remote, '/') - off_remote), off_remote);
+            if (!ARG(1) || strlen(path) >= ARG(2)) RET(0);
+            strcpy(g2h(ARG(1)), path);
+            RET(1);
+        }
+    } else if (!strcmp(iface, "ISteamFriends")) {
+        if (IS("GetPersonaName")) RET(intern_string(off_persona));
+        if (IS("GetPersonaState")) RET(1); // online
+    } else if (!strcmp(iface, "ISteamUtils")) {
+        if (IS("GetConnectedUniverse")) RET(1);
+        if (IS("GetServerRealTime")) RET((uint32_t)time(NULL));
+        if (IS("GetIPCountry")) RET(intern_string("US"));
+        if (IS("GetCurrentBatteryPower")) RET(255);
+        if (IS("GetAppID")) RET(off_appid);
+    } else if (!strcmp(iface, "ISteamApps")) {
+        if (IS("BIsSubscribed") || IS("BIsSubscribedApp") || IS("BIsDlcInstalled") || IS("BIsAppInstalled")) RET(1);
+        if (IS("GetCurrentGameLanguage") || IS("GetAvailableGameLanguages")) {
+            extern const char *dx_game_language_name(void);
+            const char *lang = dx_game_language_name();
+            RET(intern_string(lang && *lang ? lang : "english"));
+        }
+    } else if (!strcmp(iface, "ISteamUserStats")) {
+        if (IS("RequestCurrentStats")) {
+            // UserStatsReceived_t {uint64 game; EResult; CSteamID} (pack 4)
+            uint8_t cb[20] = {0};
+            uint64_t game = off_appid, id = STEAMID64_BASE + off_account;
+            int32_t ok = 1;
+            memcpy(cb, &game, 8), memcpy(cb + 8, &ok, 4), memcpy(cb + 12, &id, 8);
+            off_post(1101, cb, 20);
+            RET(1);
+        }
+        if (IS("GetAchievement") || IS("GetAchievementAndUnlockTime")) {
+            if (ARG(2)) gwrite8(ARG(2), 0);
+            RET(1);
+        }
+        if (IS("SetAchievement")) {
+            LOGI("steam: offline: achievement %s (not sent to Steam)", ARG(1) ? (const char *)g2h(ARG(1)) : "?");
+            RET(1);
+        }
+        if (IS("StoreStats") || IS("SetStat_int") || IS("SetStat_float") || IS("ClearAchievement") ||
+            IS("IndicateAchievementProgress"))
+            RET(1);
+    } else if (!strcmp(iface, "ISteamRemoteStorage")) {
+        if (IS("FileWrite")) {
+            if (!off_path(ARG(1), path, sizeof path) || (!ARG(2) && ARG(3))) RET(0);
+            char tmp[PATH_MAX];
+            snprintf(tmp, sizeof tmp, "%s.dxh-tmp", path);
+            mkdirs_for(path);
+            FILE *f = fopen(tmp, "wb");
+            bool ok = f && fwrite(g2h(ARG(2)), 1, ARG(3), f) == ARG(3);
+            if (f && fclose(f)) ok = false;
+            ok = ok && rename(tmp, path) == 0;
+            if (!ok) unlink(tmp);
+            LOGI("steam: offline: save %s (%u bytes)%s", (const char *)g2h(ARG(1)), ARG(3), ok ? "" : " FAILED");
+            RET(ok);
+        }
+        if (IS("FileRead")) {
+            if (!off_path(ARG(1), path, sizeof path) || !ARG(2)) RET(0);
+            FILE *f = fopen(path, "rb");
+            size_t n = f ? fread(g2h(ARG(2)), 1, ARG(3), f) : 0;
+            if (f) fclose(f);
+            RET((uint32_t)n);
+        }
+        if (IS("FileExists") || IS("FilePersisted") || IS("GetFileSize") || IS("GetFileTimestamp")) {
+            struct stat st;
+            bool ok = off_path(ARG(1), path, sizeof path) && stat(path, &st) == 0 && S_ISREG(st.st_mode);
+            if (IS("GetFileSize")) RET(ok ? (uint32_t)st.st_size : 0);
+            if (IS("GetFileTimestamp")) RET64(ok ? (uint64_t)st.st_mtime : 0);
+            RET(ok);
+        }
+        if (IS("FileDelete")) RET(off_path(ARG(1), path, sizeof path) && unlink(path) == 0);
+        if (IS("FileForget") || IS("IsCloudEnabledForAccount") || IS("IsCloudEnabledForApp")) RET(1);
+        if (IS("GetFileCount") || IS("GetFileNameAndSize")) {
+            static char names[512][128];
+            int n = off_list(names, 512);
+            if (IS("GetFileCount")) RET(n);
+            int i = ARGI(1);
+            if (i < 0 || i >= n) RET(0);
+            struct stat st;
+            snprintf(path, sizeof path, "%s/%s", off_remote, names[i]);
+            if (ARG(2)) gwrite32(ARG(2), stat(path, &st) == 0 ? (uint32_t)st.st_size : 0);
+            RET(intern_string(names[i]));
+        }
+        if (IS("GetQuota")) {
+            if (ARG(1)) gwrite32(ARG(1), 1u << 30);
+            if (ARG(2)) gwrite32(ARG(2), 1u << 29);
+            RET(1);
+        }
+    }
+    // Everything else: what Steam answers for a feature that is not there.
+    if (meth->sig && meth->sig[0] == 'S') RET(intern_string(""));
+    RET64(0);
+}
+
+#undef IS
+
+static void run_callbacks_offline(void) {
+    struct offcb q[16];
+    pthread_mutex_lock(&steam_lock);
+    int n = off_nqueue;
+    memcpy(q, off_queue, sizeof q[0] * (size_t)n);
+    off_nqueue = 0;
+    pthread_mutex_unlock(&steam_lock);
+    for (int i = 0; i < n; i++) dispatch_callback(q[i].icb, q[i].data, q[i].size, false);
+}
+
 // --- flat API -------------------------------------------------------------------
 
-THUNK(SteamAPI_Init) { RET(steam_init()); }
-THUNK(SteamAPI_InitSafe) { RET(steam_init()); }
-THUNK(SteamAPI_Shutdown) { steam_shutdown(); }
-THUNK(SteamAPI_IsSteamRunning) { RET(steam_running() || hpipe); }
+// DXH_STEAM=offline always plays without Steam, =online never; by default
+// offline mode takes over when the Steam client is not running.
+static bool steam_init_any(void) {
+    const char *mode = getenv("DXH_STEAM");
+    if (offline) return true;
+    if (mode && !strcmp(mode, "offline")) return steam_init_offline();
+    if (!(mode && !strcmp(mode, "online")) && !steam_running() && !hpipe) {
+        LOGI("steam: the Steam client is not running");
+        return steam_init_offline();
+    }
+    return steam_init();
+}
+
+THUNK(SteamAPI_Init) { RET(steam_init_any()); }
+THUNK(SteamAPI_InitSafe) { RET(steam_init_any()); }
+THUNK(SteamAPI_Shutdown) { if (!offline) steam_shutdown(); }
+THUNK(SteamAPI_IsSteamRunning) { RET(offline || steam_running() || hpipe); }
 // We are the launcher: never ask Steam to restart the game.
 THUNK(SteamAPI_RestartAppIfNecessary) {
     LOGI("steam: SteamAPI_RestartAppIfNecessary(%u) -> false", ARG(0));
     RET(0);
 }
-THUNK(SteamAPI_RunCallbacks) { run_callbacks(hpipe, false); }
-THUNK(Steam_RunCallbacks) { run_callbacks(ARGI(0), ARG(1) & 0xff); }
+THUNK(SteamAPI_RunCallbacks) {
+    if (offline) run_callbacks_offline();
+    else run_callbacks(hpipe, false);
+}
+THUNK(Steam_RunCallbacks) {
+    if (offline) run_callbacks_offline();
+    else run_callbacks(ARGI(0), ARG(1) & 0xff);
+}
 THUNK(Steam_RegisterInterfaceFuncs) {}
 THUNK(Steam_GetHSteamUserCurrent) { RET(huser); }
 THUNK(GetHSteamPipe) { RET(hpipe); }

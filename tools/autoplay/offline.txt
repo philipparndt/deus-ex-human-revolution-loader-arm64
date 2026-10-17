@@ -1,0 +1,17 @@
+# Steam offline mode check (run with DXH_STEAM=offline): start, continue the
+# last save, play a little, quicksave (F5), quit.
+wait 15
+key return
+wait 35
+key return
+wait 10
+key return
+wait 10
+key return
+wait 30
+shot loaded
+wander 30
+key f5
+wait 10
+shot saved
+quit

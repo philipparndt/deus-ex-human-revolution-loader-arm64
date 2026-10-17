@@ -13,7 +13,7 @@ uint8_t *guest_base;
 
 #define NPAGES (0x100000000ULL >> GPAGE_SHIFT)
 
-enum { PS_UNAVAIL = 0, PS_FREE, PS_MAPPED, PS_SLAB, PS_LARGE };
+enum { PS_UNAVAIL = 0, PS_FREE, PS_MAPPED, PS_SLAB, PS_LARGE, PS_RESERVED };
 
 static uint8_t page_state[NPAGES];
 static uint32_t large_pages[NPAGES]; // page count, stored at the first page of a large block
@@ -112,6 +112,25 @@ bool gmem_map_fixed(gaddr_t addr, uint32_t size, int prot) {
     return ok;
 }
 
+// Keeps a range for gmem_map_reserved: map_anywhere and the heap must not place
+// anything there (the host object handle region grows into it on demand).
+void gmem_reserve(gaddr_t addr, uint32_t size) {
+    pthread_mutex_lock(&mem_lock);
+    for (uint64_t a = addr & ~(GPAGE_SIZE - 1); a < (uint64_t)addr + size; a += GPAGE_SIZE)
+        if (page_state[a >> GPAGE_SHIFT] == PS_FREE) page_state[a >> GPAGE_SHIFT] = PS_RESERVED;
+    pthread_mutex_unlock(&mem_lock);
+}
+
+bool gmem_map_reserved(gaddr_t addr, uint32_t size, int prot) {
+    uint64_t start = addr & ~(GPAGE_SIZE - 1);
+    uint64_t end = ((uint64_t)addr + size + GPAGE_SIZE - 1) & ~(uint64_t)(GPAGE_SIZE - 1);
+    uint32_t first = (uint32_t)(start >> GPAGE_SHIFT), n = (uint32_t)((end - start) >> GPAGE_SHIFT);
+    pthread_mutex_lock(&mem_lock);
+    bool ok = range_has_state(first, n, PS_RESERVED) && do_map(first, n, prot, PS_MAPPED);
+    pthread_mutex_unlock(&mem_lock);
+    return ok;
+}
+
 static uint32_t find_free(uint32_t n, uint32_t align_pages) {
     for (int pass = 0; pass < 2; pass++) {
         uint32_t lo = pass == 0 ? search_cursor : 1, hi = pass == 0 ? NPAGES : search_cursor;
@@ -186,7 +205,7 @@ bool gmem_is_mapped(gaddr_t addr, uint32_t size) {
     uint64_t end = (uint64_t)addr + size;
     for (uint64_t a = addr & ~(GPAGE_SIZE - 1); a < end; a += GPAGE_SIZE) {
         int s = page_state[a >> GPAGE_SHIFT];
-        if (s == PS_FREE || s == PS_UNAVAIL) return false;
+        if (s == PS_FREE || s == PS_UNAVAIL || s == PS_RESERVED) return false;
     }
     return true;
 }

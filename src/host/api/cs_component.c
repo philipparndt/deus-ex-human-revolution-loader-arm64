@@ -42,6 +42,7 @@ THUNK(OpenAComponent) {
     AudioComponent c = hobj_unwrap(ARG(0));
     AudioComponentInstance inst = NULL;
     OSStatus st = c ? AudioComponentInstanceNew(c, &inst) : -2003 /* badComponentInstance */;
+    if (st) LOGI("OpenAComponent(%#x) = %d", ARG(0), (int)st);
     if (ARG(1)) gwrite32(ARG(1), st == noErr ? hobj_wrap(inst) : 0);
     RET((uint32_t)(int32_t)(OSErr)st);
 }

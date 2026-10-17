@@ -48,6 +48,8 @@ static uint32_t map_find(uintptr_t key) {
 void hobj_init(void) {
     slot_ptrs = calloc(HOBJ_REGION_SIZE / HOBJ_SLOT_SIZE, sizeof(void *));
     nslots = 1; // slot 0 unused so that handles are never the region base
+    // Guest memory placed here would be mistaken for handles (hobj_is_handle).
+    gmem_reserve(HOBJ_REGION_BASE, HOBJ_REGION_SIZE);
 }
 
 gaddr_t hobj_wrap(const void *host) {
@@ -61,7 +63,7 @@ gaddr_t hobj_wrap(const void *host) {
         idx = nslots++;
         if (idx >= HOBJ_REGION_SIZE / HOBJ_SLOT_SIZE) fatal("hobj: handle region exhausted");
         if (idx >= mapped_slots) {
-            if (!gmem_map_fixed(HOBJ_REGION_BASE + mapped_slots * HOBJ_SLOT_SIZE, CHUNK_SLOTS * HOBJ_SLOT_SIZE,
+            if (!gmem_map_reserved(HOBJ_REGION_BASE + mapped_slots * HOBJ_SLOT_SIZE, CHUNK_SLOTS * HOBJ_SLOT_SIZE,
                                 GPROT_RW))
                 fatal("hobj: cannot map handle region");
             mapped_slots += CHUNK_SLOTS;

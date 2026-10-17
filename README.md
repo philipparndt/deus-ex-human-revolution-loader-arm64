@@ -30,7 +30,9 @@ Work in progress, but the game is playable:
   loading screens, cutscenes and gameplay render correctly
 - audio, keyboard/mouse input, windowed and fullscreen mode
 - Steam: the 2014 `libsteam_api` is bridged to the current 64-bit Steam client
-  (ownership check, achievements, cloud saves)
+  (ownership check, achievements, cloud saves), or answered locally when Steam
+  is not running (offline mode: saves stay in the Steam user folder,
+  achievements are only logged)
 - localization (e.g. German) via Steam's language setting
 - runs natively on arm64 with the own JIT (`make native-dxcpu`), from the
   launcher through gameplay; the Rosetta build remains as reference
@@ -67,7 +69,7 @@ make                # Rosetta 2 development build           -> build/x86_64/dxho
 ## Running
 
 Install the Mac version of the game with Steam (or `steamcmd` with
-`+@sSteamCmdForcePlatformType macos`), keep Steam running and logged in, then:
+`+@sSteamCmdForcePlatformType macos`) and log in to Steam once, then:
 
 ```sh
 build/arm64-dxcpu/dxhost "/path/to/Deus Ex Human Revolution - Directors Cut.app"
@@ -77,6 +79,7 @@ Useful environment variables:
 
 | Variable | Effect |
 | --- | --- |
+| `DXH_STEAM=offline\|online` | offline: never use the Steam client (`make run` default); online: always; unset: offline only if Steam is not running |
 | `DXH_LOG=0..3`, `DXH_LOG_FILE=path` | log level (3 = trace every host call) and log file; `kill -USR1/-USR2 <pid>` toggles tracing at runtime |
 | `DXH_LANGUAGE=german` | override the game language |
 | `DXH_FPS=5` | frames/s, worst frame and frames over 33 ms every 5 s |

@@ -110,6 +110,9 @@ static void abl_sizes_to_guest(const AudioBufferList *l, gaddr_t g) {
 }
 
 // --- CoreAudio HAL ---------------------------------------------------------------------------
+// Four-character code as a printable string, most significant byte first ('%.4s').
+#define FOURCC(v) ((const char[4]){(char)((v) >> 24), (char)((v) >> 16), (char)((v) >> 8), (char)(v)})
+
 // AudioObjectPropertyAddress is three UInt32s on both sides.
 
 THUNK(AudioObjectGetPropertyDataSize) {
@@ -146,12 +149,16 @@ THUNK(AudioObjectGetPropertyData) {
         RET(st);
     }
     OSStatus st = AudioObjectGetPropertyData(ARG(0), addr, ARG(2), ARG(3) ? ARGP(3) : NULL, &size, ARGP(5));
+    if (st) LOGI("audio: AudioObjectGetPropertyData(obj %u, '%.4s') = %d", ARG(0), FOURCC(addr->mSelector), (int)st);
     gwrite32(ARG(4), size);
     RET(st);
 }
 
 THUNK(AudioObjectSetPropertyData) {
-    RET(AudioObjectSetPropertyData(ARG(0), ARGP(1), ARG(2), ARG(3) ? ARGP(3) : NULL, ARG(4), ARGP(5)));
+    OSStatus st = AudioObjectSetPropertyData(ARG(0), ARGP(1), ARG(2), ARG(3) ? ARGP(3) : NULL, ARG(4), ARGP(5));
+    if (st) LOGI("audio: AudioObjectSetPropertyData(obj %u, '%.4s') = %d", ARG(0),
+                 FOURCC(((const AudioObjectPropertyAddress *)ARGP(1))->mSelector), (int)st);
+    RET(st);
 }
 THUNK(AudioObjectHasProperty) { RET(AudioObjectHasProperty(ARG(0), ARGP(1))); }
 
@@ -191,8 +198,10 @@ static OSStatus legacy_get(AudioObjectID obj, AudioObjectPropertyScope scope, UI
 
 // AudioHardwareGetProperty(AudioHardwarePropertyID, UInt32 *ioSize, void *outData)
 THUNK(AudioHardwareGetProperty) {
-    RET(legacy_get(kAudioObjectSystemObject, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain, ARG(0),
-                   ARG(1), ARG(2)));
+    OSStatus st = legacy_get(kAudioObjectSystemObject, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain,
+                             ARG(0), ARG(1), ARG(2));
+    if (st) LOGI("audio: AudioHardwareGetProperty('%.4s') = %d", FOURCC(ARG(0)), (int)st);
+    RET(st);
 }
 // AudioHardwareGetPropertyInfo(id, UInt32 *outSize, Boolean *outWritable)
 THUNK(AudioHardwareGetPropertyInfo) {
@@ -267,12 +276,29 @@ static AudioObjectPropertyScope legacy_scope(uint32_t is_input) {
     return is_input & 0xff ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput;
 }
 // AudioDeviceGetProperty(dev, UInt32 channel, Boolean isInput, id, UInt32 *ioSize, void *out)
-THUNK(AudioDeviceGetProperty) { RET(legacy_get(ARG(0), legacy_scope(ARG(2)), ARG(1), ARG(3), ARG(4), ARG(5))); }
+// FMOD re-opens its output unit on a device change only if its buffer size
+// (1024 frames) lies in the device's buffer size range; otherwise it wants to
+// change its own buffer size, which it cannot while running, and stays silent.
+// AirPods allow at most 960 frames. So the range reports a larger maximum and
+// setting the buffer size clamps it to the real range: the device then runs
+// with smaller buffers, which the unit's MaximumFramesPerSlice still covers.
+#define FMOD_MAX_BUFFER_FRAMES 8192.0
+
+THUNK(AudioDeviceGetProperty) {
+    OSStatus st = legacy_get(ARG(0), legacy_scope(ARG(2)), ARG(1), ARG(3), ARG(4), ARG(5));
+    if (!st && ARG(3) == kAudioDevicePropertyBufferFrameSizeRange && ARG(5)) {
+        AudioValueRange *range = g2h(ARG(5));
+        if (range->mMaximum < FMOD_MAX_BUFFER_FRAMES) range->mMaximum = FMOD_MAX_BUFFER_FRAMES;
+    }
+    if (st) LOGI("audio: AudioDeviceGetProperty(dev %u, '%.4s', %s) = %d", ARG(0), FOURCC(ARG(3)), ARG(2) & 0xff ? "in" : "out", (int)st);
+    RET(st);
+}
 // AudioDeviceGetPropertyInfo(dev, channel, isInput, id, UInt32 *outSize, Boolean *outWritable)
 THUNK(AudioDeviceGetPropertyInfo) {
     AudioObjectPropertyAddress a = {ARG(3), legacy_scope(ARG(2)), ARG(1)};
     UInt32 size = 0;
     OSStatus st = AudioObjectGetPropertyDataSize(ARG(0), &a, 0, NULL, &size);
+    if (st) LOGI("audio: AudioDeviceGetPropertyInfo(dev %u, '%.4s') = %d", ARG(0), FOURCC(ARG(3)), (int)st);
     if (ARG(4)) gwrite32(ARG(4), size);
     if (ARG(5)) {
         Boolean w = false;
@@ -284,7 +310,21 @@ THUNK(AudioDeviceGetPropertyInfo) {
 // AudioDeviceSetProperty(dev, const AudioTimeStamp *when, channel, isInput, id, size, data)
 THUNK(AudioDeviceSetProperty) {
     AudioObjectPropertyAddress a = {ARG(4), legacy_scope(ARG(3)), ARG(2)};
-    RET(AudioObjectSetPropertyData(ARG(0), &a, 0, NULL, ARG(5), ARGP(6)));
+    if (ARG(4) == kAudioDevicePropertyBufferFrameSize && ARG(5) == 4 && ARG(6)) {
+        AudioObjectPropertyAddress ra = {kAudioDevicePropertyBufferFrameSizeRange, a.mScope, a.mElement};
+        AudioValueRange range;
+        UInt32 rs = sizeof range;
+        UInt32 frames = gread32(ARG(6));
+        if (!AudioObjectGetPropertyData(ARG(0), &ra, 0, NULL, &rs, &range) && frames > range.mMaximum) {
+            LOGI("audio: device %u buffer size %u frames clamped to %.0f", ARG(0), frames, range.mMaximum);
+            frames = (UInt32)range.mMaximum;
+            RET(AudioObjectSetPropertyData(ARG(0), &a, 0, NULL, 4, &frames));
+            return;
+        }
+    }
+    OSStatus st = AudioObjectSetPropertyData(ARG(0), &a, 0, NULL, ARG(5), ARGP(6));
+    if (st) LOGI("audio: AudioDeviceSetProperty(dev %u, '%.4s') = %d", ARG(0), FOURCC(ARG(4)), (int)st);
+    RET(st);
 }
 
 // --- AudioUnit ---------------------------------------------------------------------------------
@@ -402,6 +442,7 @@ THUNK(AudioUnitGetProperty) {
         RET(kAudioUnitErr_InvalidProperty);
     }
     OSStatus st = AudioUnitGetProperty(AU(0), id, ARG(2), ARG(3), ARG(4) ? ARGP(4) : NULL, &size);
+    if (st) LOGI("audio: AudioUnitGetProperty(%#x, id %u, scope %u) = %d", ARG(0), id, ARG(2), (int)st);
     if (ARG(5)) gwrite32(ARG(5), size);
     RET(st);
 }
