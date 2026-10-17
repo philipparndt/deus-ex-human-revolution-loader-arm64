@@ -2270,23 +2270,24 @@ impl Translator {
                     Test => (K_LOGIC, false),
                     _ => (K_LOGIC, true),
                 };
-                if sh != 0 {
+                // 8/16-bit operands at the top of the register (flags of the narrow size)
+                let (x, y) = if sh != 0 {
                     self.a.lsl_w_imm(T2, T0, sh);
                     self.a.lsl_w_imm(T3, T1, sh);
+                    (T2, T3)
                 } else {
-                    self.a.mov_w(T2, T0);
-                    self.a.mov_w(T3, T1);
-                }
+                    (T0, T1)
+                };
                 match m {
-                    Add => self.a.adds_w(T2, T2, T3),
-                    Sub | Cmp => self.a.subs_w(T2, T2, T3),
-                    And | Test => self.a.ands_w(T2, T2, T3),
+                    Add => self.a.adds_w(T2, x, y),
+                    Sub | Cmp => self.a.subs_w(T2, x, y),
+                    And | Test => self.a.ands_w(T2, x, y),
                     Or => {
-                        self.a.orr_w(T2, T2, T3);
+                        self.a.orr_w(T2, x, y);
                         self.a.tst_w(T2, T2);
                     }
                     _ => {
-                        self.a.eor_w(T2, T2, T3);
+                        self.a.eor_w(T2, x, y);
                         self.a.tst_w(T2, T2);
                     }
                 }
@@ -2318,9 +2319,14 @@ impl Translator {
                 }
                 self.load(insn, 0, T0);
                 let sh = 32 - size * 8;
-                self.a.lsl_w_imm(T2, T0, sh);
-                self.a.mov_w_imm(T3, 1 << sh);
-                if m == Inc { self.a.adds_w(T2, T2, T3) } else { self.a.subs_w(T2, T2, T3) }
+                if sh == 0 {
+                    // adds / subs w2, w0, #1
+                    self.a.emit(if m == Inc { 0x3100_0400 } else { 0x7100_0400 } | (T0 << 5) | T2);
+                } else {
+                    self.a.lsl_w_imm(T2, T0, sh);
+                    self.a.mov_w_imm(T3, 1 << sh);
+                    if m == Inc { self.a.adds_w(T2, T2, T3) } else { self.a.subs_w(T2, T2, T3) }
+                }
                 if sh != 0 {
                     self.a.lsr_w_imm(T2, T2, sh);
                 }
