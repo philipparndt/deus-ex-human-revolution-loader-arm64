@@ -209,6 +209,56 @@ fn unaligned_stores() {
     }
 }
 
+/// cmp/test/add directly before the block's conditional branch, with flags
+/// read again in both successor blocks (lazy descriptor stored at the exits).
+#[test]
+fn flags_across_final_branch() {
+    type Op = fn(&mut CodeAssembler) -> Result<(), IcedError>;
+    let ops: [(&str, Op); 9] = [
+        ("cmp r,r", |a| a.cmp(eax, ebx)),
+        ("cmp r,imm", |a| a.cmp(eax, 0x40)),
+        ("cmp r,bigimm", |a| a.cmp(eax, 0x1234_5678)),
+        ("test r,r", |a| a.test(eax, ebx)),
+        ("test r,imm", |a| a.test(eax, 0x8000_0001u32 as i32)),
+        ("cmp m,r", |a| a.cmp(dword_ptr(edi), eax)),
+        ("cmp r8,r8", |a| a.cmp(al, bl)),
+        ("sub m16,imm", |a| a.sub(word_ptr(edi + 2), 0x7fff)),
+        ("and r,r", |a| a.and(eax, ebx)),
+    ];
+    for (name, op) in ops {
+        for jcc in 0..4 {
+            let code = asm(|a| {
+                let mut taken = a.create_label();
+                op(a)?;
+                match jcc {
+                    0 => a.jl(taken)?,
+                    1 => a.jp(taken)?,
+                    2 => a.jb(taken)?,
+                    _ => a.je(taken)?,
+                }
+                a.setp(dl)?;
+                a.seta(dh)?;
+                a.adc(esi, 0)?;
+                a.jmp(STOP as u64)?;
+                a.set_label(&mut taken)?;
+                a.setp(cl)?;
+                a.pushfd()?;
+                a.pop(esi)?;
+                a.jo(STOP as u64)
+            });
+            for (x, y) in [(0x40u32, 0x40u32), (0x7fff_ffff, 0xffff_ffff), (3, 0x8000_0000), (0x8000_0001, 1), (0x41, 0x40)] {
+                let mut st = state();
+                st.gpr[EAX] = x;
+                st.gpr[EBX] = y;
+                st.gpr[EDI] = DATA;
+                let mut data = y.to_le_bytes().to_vec();
+                data.extend_from_slice(&x.to_le_bytes());
+                check(&format!("{name} j{jcc} {x:#x} {y:#x}"), &code, &st, &data, flags::ARITH);
+            }
+        }
+    }
+}
+
 /// Calls into the thunk stub range leave the engine with Exit::Stub; the host
 /// returns by popping the return address. Many round trips through the
 /// dispatcher (block cache lookups, lazy flags dropped at the stub exit).

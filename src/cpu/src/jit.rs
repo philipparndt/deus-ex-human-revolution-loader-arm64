@@ -577,8 +577,10 @@ impl Jit {
         for (i, insn) in insns.iter().enumerate() {
             let live = flags_live_after(&insns, i);
             t.ld_dep_next = t.tso && load_feeds_next_load(insn, insns.get(i + 1));
+            t.defer_flags = i + 2 == insns.len() && insns[i + 1].flow_control() == FlowControl::ConditionalBranch;
             let cont = t.insn(insn, live);
             t.ld_dep_next = false;
+            t.defer_flags = false;
             if !cont {
                 break;
             }
@@ -773,6 +775,28 @@ struct FlagSrc {
     size: u32,
 }
 
+/// Where the operands of the lazy flag descriptor are while their copies into
+/// FA/FB/FR are deferred (see Translator::defer_flags).
+#[derive(Clone, Copy)]
+struct PendFlags {
+    a: u32,
+    b: PendB,
+    r: PendR,
+}
+#[derive(Clone, Copy)]
+enum PendB {
+    Reg(u32),
+    Imm(u32),
+}
+#[derive(Clone, Copy)]
+enum PendR {
+    Reg(u32),
+    /// FA - FB (cmp)
+    Sub,
+    /// FA & FB (test)
+    And,
+}
+
 /// Out-of-line slow path, emitted after the block body (see `finish`).
 #[derive(Clone)]
 enum ColdKind {
@@ -839,6 +863,11 @@ struct Translator {
     nzcv: Option<FlagSrc>,
     /// The lazy descriptor in registers must be stored to ctx at exits.
     dirty: bool,
+    /// The current instruction's flags are only read by the conditional branch
+    /// that ends the block: its operands need not be copied to FA/FB/FR unless
+    /// an exit stores the descriptor (flush_flags copies them from `pend`).
+    defer_flags: bool,
+    pend: Option<PendFlags>,
     /// SSE floating point may be translated (MXCSR control bits are the default).
     fp_ok: bool,
     /// Guest xmm registers cached in v16..v23 (bit i = xmm i), and those modified
@@ -886,6 +915,8 @@ impl Translator {
             keep: Vec::new(),
             nzcv: None,
             dirty: false,
+            defer_flags: false,
+            pend: None,
             fp_ok,
             xvalid: 0,
             xdirty: 0,
@@ -1661,6 +1692,18 @@ impl Translator {
 
     /// Store the lazy flag descriptor (if flags were produced in this block).
     fn flush_flags(&mut self) {
+        if let (true, Some(_), Some(p)) = (self.dirty, self.nzcv, self.pend.take()) {
+            self.a.mov_w(FA, p.a);
+            match p.b {
+                PendB::Reg(r) => self.a.mov_w(FB, r),
+                PendB::Imm(v) => self.a.mov_w_imm(FB, v),
+            }
+            match p.r {
+                PendR::Reg(r) => self.a.mov_w(FR, r),
+                PendR::Sub => self.a.sub_w(FR, FA, FB),
+                PendR::And => self.a.and_w(FR, FA, FB),
+            }
+        }
         if let (true, Some(f)) = (self.dirty, self.nzcv) {
             if f.kind == K_FCMP {
                 // ucomiss & co: ZF = Z|V (equal or unordered), PF = V, CF = N|V (Lt); OF=SF=AF=0.
@@ -1698,13 +1741,12 @@ impl Translator {
     /// Exit to a known guest eip, storing the lazy flags only if the target
     /// may read them.
     fn exit_direct_flags(&mut self, target: u32) {
-        let saved = (self.nzcv, self.dirty);
+        let saved = (self.nzcv, self.dirty, self.pend);
         if !flags_dead_at(target) {
             self.flush_flags();
         }
         self.exit_direct(target);
-        self.nzcv = saved.0;
-        self.dirty = saved.1;
+        (self.nzcv, self.dirty, self.pend) = saved;
     }
 
     /// Exit to a known guest eip: a patchable branch (initially to the slow
@@ -2208,7 +2250,12 @@ impl Translator {
                 if sh != 0 {
                     self.a.lsr_w_imm(T2, T2, sh);
                 }
-                if flags_live {
+                if flags_live && self.defer_flags {
+                    // T0-T2 stay intact up to the branch (the store below keeps them)
+                    self.pend = Some(PendFlags { a: T0, b: PendB::Reg(T1), r: PendR::Reg(T2) });
+                    self.nzcv = Some(FlagSrc { kind, size });
+                    self.dirty = true;
+                } else if flags_live {
                     self.a.mov_w(FA, T0);
                     self.a.mov_w(FB, T1);
                     self.a.mov_w(FR, T2);
@@ -2732,8 +2779,10 @@ impl Translator {
                     Sub | Cmp => K_SUB,
                     _ => K_LOGIC,
                 };
-                // Keep the operands for the lazy flag descriptor before overwriting d.
-                if flags_live {
+                // Keep the operands for the lazy flag descriptor before overwriting d
+                // (cmp/test leave them in place: copied only if an exit needs them).
+                let defer = flags_live && self.defer_flags && matches!(m, Cmp | Test);
+                if flags_live && !defer {
                     self.a.mov_w(FA, d);
                     if b == u32::MAX { self.a.mov_w_imm(FB, imm) } else { self.a.mov_w(FB, b) }
                 }
@@ -2753,7 +2802,12 @@ impl Translator {
                         self.a.tst_w(d, d);
                     }
                 }
-                if flags_live {
+                if defer {
+                    let b = if b == u32::MAX { PendB::Imm(imm) } else { PendB::Reg(b) };
+                    let r = if m == Cmp { PendR::Sub } else { PendR::And };
+                    self.pend = Some(PendFlags { a: d, b, r });
+                    self.dirty = true;
+                } else if flags_live {
                     if matches!(m, Cmp | Test) {
                         // result needed for PF/ZF materialisation
                         match m {
