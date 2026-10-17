@@ -428,6 +428,8 @@ pub struct Jit {
     fp_ok: bool,
     /// Indirect branch target cache (filled by run_once, read by translated code).
     ibtc: Box<[IbEntry]>,
+    /// Body length (words) of the last translated block (see translate_words).
+    last_body: usize,
 }
 
 const BUF_SIZE: usize = 64 << 20;
@@ -479,6 +481,7 @@ impl Jit {
             translated: 0,
             fp_ok,
             ibtc: vec![IbEntry { eip: u32::MAX, pad: 0, code: 0 }; IBTC_SIZE].into_boxed_slice(),
+            last_body: 0,
         }
     }
 
@@ -510,6 +513,15 @@ impl Jit {
         }
         ctx.ibtc = self.ibtc.as_mut_ptr();
         (self.enter)(ctx as *mut JitCtx, code)
+    }
+
+    /// Translate the block at `eip` without running it and return its code
+    /// words and the length of the block body without the cold paths and
+    /// literals (offline analysis: instruction counts of given guest code).
+    pub fn translate_words(&mut self, eip: u32) -> (Vec<u32>, usize) {
+        let p = self.translate(eip);
+        let n = (self.buf.next_addr() - p as usize) / 4;
+        (unsafe { std::slice::from_raw_parts(p as *const u32, n) }.to_vec(), self.last_body)
     }
 
     fn translate(&mut self, eip: u32) -> *const u8 {
@@ -556,6 +568,7 @@ impl Jit {
                 t.exit_direct_flags(insn.next_ip32());
             }
         }
+        self.last_body = t.a.pos();
         t.finish();
         let code = std::mem::take(&mut t.a.code);
         if let Some(path) = std::env::var_os("DXCPU_JITDUMP") {
@@ -709,6 +722,8 @@ enum ColdKind {
     Interp(Vec<u64>),
     /// Evaluate the x86 condition (Mnemonic of a jcc) with helper_cond; result -> NZCV (Ne = true).
     Cond(u32),
+    /// x86_nan_fixup(r, a, b) of a single-precision op whose result has a NaN lane.
+    NanFix(u32, Option<u32>, u32),
 }
 
 #[derive(Clone)]
@@ -914,6 +929,12 @@ impl Translator {
         let colds = std::mem::take(&mut self.cold);
         for c in colds {
             self.a.bind(c.fix);
+            if let ColdKind::NanFix(r, a, b) = c.kind {
+                // native, no helper call: registers are as at the branch
+                self.x86_nan_fixup(r, a, b);
+                self.a.b_to(c.resume);
+                continue;
+            }
             self.xmm_store(c.dirty);
             for i in 0..8u32 {
                 if c.saved & (1 << i) != 0 {
@@ -944,6 +965,7 @@ impl Translator {
                         self.a.ldp_w(G[2 * i as usize], G[2 * i as usize + 1], CTX, 8 * i);
                     }
                 }
+                ColdKind::NanFix(..) => unreachable!(),
                 ColdKind::Cond(m) => {
                     self.a.mov_x(0, CTX);
                     self.a.mov_w_imm(1, *m);
@@ -969,6 +991,7 @@ impl Translator {
                     self.a.cmp_w(0, XZR);
                     self.a.b_to(c.resume);
                 }
+                ColdKind::NanFix(..) => unreachable!(),
             }
         }
         let consts = std::mem::take(&mut self.consts);
@@ -1015,6 +1038,19 @@ impl Translator {
     /// operand), and invalid operations on non-NaN inputs give the x86 default
     /// NaN 0xffc00000 instead of 0x7fc00000. `a` = first operand (None for sqrt),
     /// `b` = second/only source; neither may alias `r`. Uses V2, V5, V6.
+    /// x86_nan_fixup on a cold path, taken only if some lane of `r` is NaN (the
+    /// fixup only changes NaN lanes). Keeps the fixup's dependency chain and
+    /// instructions off the hot path; `r`, `a` and `b` must stay unchanged until
+    /// the next instruction. Uses V2 and T1.
+    fn x86_nan_check(&mut self, r: u32, a: Option<u32>, b: u32) {
+        self.a.fcmeq_v(false, V2, r, r);
+        self.a.uminv_4s(V2, V2);
+        self.a.fmov_w_s(T1, V2);
+        let fix = self.a.cbz_w_fixup(T1);
+        let c = Cold { fix, kind: ColdKind::NanFix(r, a, b), dirty: 0, saved: 0, valid: 0, resume: self.a.pos() };
+        self.cold.push(c);
+    }
+
     fn x86_nan_fixup(&mut self, r: u32, a: Option<u32>, b: u32) {
         debug_assert!(a != Some(r) && b != r);
         self.a.fcmeq_v(false, V6, b, b); // b not NaN
@@ -2861,8 +2897,8 @@ impl Translator {
                     let vd = self.xmod(d);
                     (vd, vd)
                 };
-                // Single precision: x86 NaN results are produced exactly (x86_nan_fixup),
-                // so no deferred check. The first operand is overwritten by packed ops in
+                // Single precision: x86 NaN results are produced exactly (x86_nan_fixup
+                // on a cold path), so no deferred check. The first operand is overwritten by packed ops in
                 // place, keep a copy (also when it is the source register).
                 let exact = !dbl;
                 let (a, b) = if !exact {
@@ -2900,7 +2936,7 @@ impl Translator {
                     (_, false) => self.a.fsqrt_v(dbl, r, vs),
                 }
                 if exact {
-                    self.x86_nan_fixup(r, if sqrt { None } else { Some(a) }, b);
+                    self.x86_nan_check(r, if sqrt { None } else { Some(a) }, b);
                 } else {
                     // scalar ops zero the upper lanes of V0, so a full-width check is fine
                     self.seg_check(dbl, r);

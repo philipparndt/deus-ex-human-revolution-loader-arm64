@@ -1,0 +1,179 @@
+//! Translated code vs interpreter on hand-written instruction sequences that
+//! exercise translator special cases (lazy flags, NaN fixups, ...). Each case
+//! runs from the same state through both engines; registers, defined flags,
+//! xmm registers and memory must match.
+//!
+//! Guest memory is process-global (mem::set_base), so the cases run one at a
+//! time under LOCK.
+
+use dxcpu::interp::Engine;
+use dxcpu::jit::JitEngine;
+use dxcpu::mem;
+use dxcpu::state::*;
+use iced_x86::code_asm::*;
+use std::sync::Mutex;
+
+const MEM: usize = 1 << 20;
+const CODE: u32 = 0x1000;
+const STOP: u32 = 0x8000;
+const DATA: u32 = 0x10000;
+const STACK: u32 = 0x80000;
+
+static LOCK: Mutex<()> = Mutex::new(());
+
+/// Assemble a sequence at CODE, followed by a jump to STOP.
+fn asm(f: impl FnOnce(&mut CodeAssembler) -> Result<(), IcedError>) -> Vec<u8> {
+    let mut a = CodeAssembler::new(32).unwrap();
+    f(&mut a).unwrap();
+    a.jmp(STOP as u64).unwrap();
+    a.assemble(CODE as u64).unwrap()
+}
+
+struct Out {
+    st: CpuState,
+    exit: Exit,
+    mem: Vec<u8>,
+}
+
+fn run(jit: bool, code: &[u8], st: &CpuState, data: &[u8]) -> Out {
+    let mut m = vec![0u8; MEM];
+    m[CODE as usize..CODE as usize + code.len()].copy_from_slice(code);
+    m[DATA as usize..DATA as usize + data.len()].copy_from_slice(data);
+    mem::set_base(m.as_mut_ptr());
+    let mut s = *st;
+    let exit = if jit {
+        JitEngine::new(0xFFFF_0000, 0xFFFF_0010).run(&mut s, STOP)
+    } else {
+        Engine::new(0xFFFF_0000, 0xFFFF_0010).run(&mut s, STOP)
+    };
+    mem::set_base(std::ptr::null_mut());
+    Out { st: s, exit, mem: m }
+}
+
+/// Run `code` in both engines and compare; `flags` = EFLAGS bits that must match.
+fn check(name: &str, code: &[u8], st: &CpuState, data: &[u8], flags: u32) -> CpuState {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let a = run(false, code, st, data);
+    let b = run(true, code, st, data);
+    assert_eq!(a.exit, b.exit, "{name}: exit");
+    assert_eq!(a.st.gpr, b.st.gpr, "{name}: gpr");
+    assert_eq!(a.st.eip, b.st.eip, "{name}: eip");
+    assert_eq!(a.st.eflags & flags, b.st.eflags & flags, "{name}: eflags {:#x} vs {:#x}", a.st.eflags, b.st.eflags);
+    for i in 0..8 {
+        assert_eq!(a.st.xmm[i], b.st.xmm[i], "{name}: xmm{i}");
+    }
+    assert!(a.mem == b.mem, "{name}: memory");
+    b.st
+}
+
+fn state() -> CpuState {
+    let mut st = CpuState::new();
+    st.gpr[ESP] = STACK;
+    st.gpr[EBX] = DATA;
+    st.eip = CODE;
+    st
+}
+
+fn set_ps(st: &mut CpuState, i: usize, v: [u32; 4]) {
+    for k in 0..4 {
+        st.xmm[i][4 * k..4 * k + 4].copy_from_slice(&v[k].to_le_bytes());
+    }
+}
+
+const SPECIAL: [u32; 8] = [
+    0x3f80_0000, // 1
+    0x0000_0000, // 0
+    0x7f80_0000, // +inf
+    0xff80_0000, // -inf
+    0x7fc0_0001, // QNaN
+    0xffc0_0002, // -QNaN
+    0x7fa0_0003, // SNaN
+    0xbf80_0000, // -1
+];
+
+/// Single-precision arithmetic with every pair of special operands in every
+/// lane position: x86 NaN propagation (first operand wins, quieted) and the
+/// x86 default NaN must come out of the cold fixup path exactly.
+#[test]
+fn sse_single_nan_results() {
+    let ops: Vec<(&str, Vec<u8>)> = vec![
+        ("addps", asm(|a| a.addps(xmm0, xmm1))),
+        ("subps", asm(|a| a.subps(xmm0, xmm1))),
+        ("mulps", asm(|a| a.mulps(xmm0, xmm1))),
+        ("divps", asm(|a| a.divps(xmm0, xmm1))),
+        ("sqrtps", asm(|a| a.sqrtps(xmm0, xmm1))),
+        ("sqrtps same", asm(|a| a.sqrtps(xmm0, xmm0))),
+        ("addps same", asm(|a| a.addps(xmm0, xmm0))),
+        ("addss", asm(|a| a.addss(xmm0, xmm1))),
+        ("mulss", asm(|a| a.mulss(xmm0, xmm1))),
+        ("divss", asm(|a| a.divss(xmm0, xmm1))),
+        ("sqrtss", asm(|a| a.sqrtss(xmm0, xmm1))),
+        ("mulps mem", asm(|a| a.mulps(xmm0, xmmword_ptr(ebx)))),
+        ("subss mem", asm(|a| a.subss(xmm0, dword_ptr(ebx + 4)))),
+        // chained: a fixed-up NaN feeds the next operation
+        (
+            "chain",
+            asm(|a| {
+                a.mulps(xmm0, xmm1)?;
+                a.addps(xmm0, xmm1)?;
+                a.movaps(xmm2, xmm0)?;
+                a.divps(xmm2, xmm1)?;
+                a.addss(xmm2, xmm0)
+            }),
+        ),
+    ];
+    for (name, code) in &ops {
+        for (i, &x) in SPECIAL.iter().enumerate() {
+            for (j, &y) in SPECIAL.iter().enumerate() {
+                let mut st = state();
+                let z = SPECIAL[(i + j) % 8];
+                set_ps(&mut st, 0, [x, y, z, x]);
+                set_ps(&mut st, 1, [y, x, y, z]);
+                set_ps(&mut st, 2, [z, z, x, y]);
+                let mut data = Vec::new();
+                for v in [y, x, z, y] {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
+                check(&format!("{name} {x:#x} {y:#x}"), code, &st, &data, flags::ARITH);
+            }
+        }
+    }
+}
+
+/// inc/dec keep CF; after adc/sbb/shifts it is only in a register (FC).
+#[test]
+fn carry_kept_by_inc_dec() {
+    let codes: Vec<(&str, Vec<u8>)> = vec![
+        ("adc inc", asm(|a| {
+            a.adc(eax, ebx)?;
+            a.inc(ecx)?;
+            a.setb(dl)
+        })),
+        ("sbb dec adc", asm(|a| {
+            a.sbb(eax, 0x12345)?;
+            a.dec(ecx)?;
+            a.adc(edx, 0)
+        })),
+        ("shl inc", asm(|a| {
+            a.shl(eax, 3)?;
+            a.inc(ecx)?;
+            a.setb(dl)
+        })),
+        ("adc mem dec sbb8", asm(|a| {
+            a.adc(dword_ptr(ebx), edx)?;
+            a.dec(edi)?;
+            a.sbb(ah, dh)
+        })),
+    ];
+    for (name, code) in &codes {
+        for (eax_v, cf) in [(0xffff_fff0u32, 0u32), (0xffff_fff0, 1), (5, 0), (0x8000_0001, 1), (0, 1)] {
+            let mut st = state();
+            st.gpr[EAX] = eax_v;
+            st.gpr[ECX] = 0x7fff_ffff;
+            st.gpr[EDX] = 0x8000_0000;
+            st.gpr[EDI] = 1;
+            st.eflags = 0x202 | cf;
+            check(&format!("{name} {eax_v:#x} cf={cf}"), code, &st, &0xfedc_ba98u32.to_le_bytes(), flags::ARITH);
+        }
+    }
+}
