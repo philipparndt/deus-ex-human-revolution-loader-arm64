@@ -1833,6 +1833,12 @@ impl Translator {
 
     /// Compute the effective address of the memory operand into T4.
     fn ea(&mut self, insn: &Instruction) {
+        self.ea_into(insn, T4);
+    }
+
+    /// The effective address into rd (which may be the base or index register:
+    /// each step reads its inputs before writing rd).
+    fn ea_into(&mut self, insn: &Instruction, rd: u32) {
         let base = insn.memory_base();
         let index = insn.memory_index();
         let disp = insn.memory_displacement32();
@@ -1848,43 +1854,36 @@ impl Translator {
             || (base == Register::EBP
                 && tso_ebp_local()
                 && (self.ebp_frame || (index == Register::None && (disp as i32) < 0)));
-        let mut have = false;
-        if base != Register::None && index == Register::None {
-            // [base + disp]: one instruction when the displacement fits an add/sub immediate
-            let d = disp as i32;
-            if (0..4096).contains(&d) {
-                self.a.add_w_imm(T4, gr(base), d as u32);
-                return;
-            } else if (-4095..0).contains(&d) {
-                self.a.sub_w_imm(T4, gr(base), (-d) as u32);
-                return;
-            }
-        }
-        if base != Register::None {
-            self.a.mov_w(T4, gr(base));
-            have = true;
-        }
-        if index != Register::None {
-            let sh = insn.memory_index_scale().trailing_zeros();
-            if have {
-                self.a.add_w_lsl(T4, T4, gr(index), sh);
+        let d = disp as i32;
+        let small = (-4095..4096).contains(&d);
+        let add_disp = |t: &mut Self, rn: u32| {
+            if d >= 0 {
+                t.a.add_w_imm(rd, rn, d as u32);
             } else {
-                self.a.lsl_w_imm(T4, gr(index), sh);
-                have = true;
+                t.a.sub_w_imm(rd, rn, (-d) as u32);
             }
-        }
-        if !have {
-            self.a.mov_w_imm(T4, disp);
-        } else if disp != 0 {
-            let d = disp as i32;
-            if (0..4096).contains(&d) {
-                self.a.add_w_imm(T4, T4, d as u32);
-            } else if (-4095..0).contains(&d) {
-                self.a.sub_w_imm(T4, T4, (-d) as u32);
-            } else {
+        };
+        match (base != Register::None, index != Register::None) {
+            (true, false) if small => add_disp(self, gr(base)),
+            (true, false) => {
                 self.a.mov_w_imm(T5, disp);
-                self.a.add_w(T4, T4, T5);
+                self.a.add_w(rd, gr(base), T5);
             }
+            (has_base, true) => {
+                let sh = insn.memory_index_scale().trailing_zeros();
+                if has_base {
+                    self.a.add_w_lsl(rd, gr(base), gr(index), sh);
+                } else {
+                    self.a.lsl_w_imm(rd, gr(index), sh);
+                }
+                if disp != 0 && small {
+                    add_disp(self, rd);
+                } else if disp != 0 {
+                    self.a.mov_w_imm(T5, disp);
+                    self.a.add_w(rd, rd, T5);
+                }
+            }
+            (false, false) => self.a.mov_w_imm(rd, disp),
         }
     }
 
@@ -2220,6 +2219,24 @@ impl Translator {
         match m {
             // prefetch is only a cache hint (never faults)
             Nop | Prefetcht0 | Prefetcht1 | Prefetcht2 | Prefetchnta | Prefetchw => {}
+            // 32-bit register destinations are loaded / computed in place, 32-bit
+            // register sources (and zero) stored directly.
+            Mov | Movzx | Movsx if size == 4 && insn.op0_kind() == OpKind::Register && insn.op1_kind() == OpKind::Memory => {
+                let d = gr(insn.op0_register());
+                self.ea(insn);
+                let sz = insn.memory_size().size();
+                self.gld(log2(sz), d, T4);
+                if m == Movsx {
+                    if sz == 1 { self.a.sxtb_w(d, d) } else { self.a.sxth_w(d, d) }
+                }
+            }
+            Mov if insn.op0_kind() == OpKind::Memory
+                && ((insn.op1_kind() == OpKind::Register && insn.op1_register().size() == 4)
+                    || (insn.op1_kind() != OpKind::Register && insn.immediate(1) == 0)) =>
+            {
+                let src = if insn.op1_kind() == OpKind::Register { gr(insn.op1_register()) } else { XZR };
+                self.store(insn, src, false);
+            }
             Mov => {
                 self.load(insn, 1, T0);
                 self.store(insn, T0, false);
@@ -2233,6 +2250,7 @@ impl Translator {
                 if interp::op_size(insn, 1) == 1 { self.a.sxtb_w(T0, T0) } else { self.a.sxth_w(T0, T0) }
                 self.store(insn, T0, false);
             }
+            Lea if size == 4 => self.ea_into(insn, gr(insn.op0_register())),
             Lea => {
                 self.ea(insn);
                 self.store(insn, T4, false);
@@ -2677,10 +2695,22 @@ impl Translator {
                 self.nzcv = None;
             }
             Push if size == 4 => {
-                self.load(insn, 0, T0);
+                // push esp stores the old value
+                let r = match insn.op0_kind() {
+                    OpKind::Register if insn.op0_register() != Register::ESP => gr(insn.op0_register()),
+                    _ => {
+                        self.load(insn, 0, T0);
+                        T0
+                    }
+                };
                 let esp = G[ESP];
                 self.a.sub_w_imm(esp, esp, 4);
-                self.a.str_uxtw(2, T0, BASE, esp);
+                self.a.str_uxtw(2, r, BASE, esp);
+            }
+            Pop if size == 4 && insn.op0_kind() == OpKind::Register && insn.op0_register() != Register::ESP => {
+                let esp = G[ESP];
+                self.a.ldr_uxtw(2, gr(insn.op0_register()), BASE, esp);
+                self.a.add_w_imm(esp, esp, 4);
             }
             Pop if size == 4 => {
                 let esp = G[ESP];

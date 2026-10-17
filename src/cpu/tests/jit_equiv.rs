@@ -315,6 +315,55 @@ fn flags_dead_at_call_and_ret() {
     check("call/ret loop", &code, &st, &[], flags::ARITH);
 }
 
+/// Effective addresses of every shape (base, index * scale, small / large /
+/// negative displacement, absolute), also with the destination of lea / mov
+/// being the base or index register; push/pop of registers, memory and ESP.
+#[test]
+fn addressing_modes() {
+    let mems: Vec<(&str, AsmMemoryOperand)> = vec![
+        ("[ebx]", dword_ptr(ebx)),
+        ("[ebx+8]", dword_ptr(ebx + 8)),
+        ("[ebx+5000]", dword_ptr(ebx + 5000)),
+        ("[esi-12]", dword_ptr(esi - 12)),
+        ("[esi-5000]", dword_ptr(esi - 5000)),
+        ("[ebx+ecx]", dword_ptr(ebx + ecx)),
+        ("[ebx+ecx*4+12]", dword_ptr(ebx + ecx * 4 + 12)),
+        ("[ebx+ecx*8-4]", dword_ptr(ebx + ecx * 8 - 4)),
+        ("[ebx+ecx*2+5000]", dword_ptr(ebx + ecx * 2 + 5000)),
+        ("[ecx*4+DATA]", dword_ptr(ecx * 4 + DATA as i32)),
+        ("[ecx*4+DATA+5000]", dword_ptr(ecx * 4 + DATA as i32 + 5000)),
+        ("[DATA+16]", dword_ptr(DATA as u64 + 16)),
+    ];
+    for (name, m) in &mems {
+        let m = *m;
+        let code = asm(|a| {
+            a.lea(eax, m)?;
+            a.lea(edx, m)?;
+            a.mov(edi, m)?;
+            a.add(m, 0x55)?;
+            a.mov(m, edx)?;
+            a.mov(m, 0)?;
+            a.movzx(ebp, byte_ptr(eax))?;
+            a.movsx(ebp, word_ptr(eax + 2))?;
+            a.push(m)?;
+            a.push(esp)?;
+            a.push(edi)?;
+            a.pop(m)?;
+            a.pop(ebp)?;
+            a.pop(esp)?;
+            a.lea(ecx, m)?; // index register as destination
+            a.lea(esi, m)?; // base register as destination
+            a.lea(ebx, m) // base register as destination
+        });
+        let mut st = state();
+        st.gpr[EBX] = DATA + 0x100;
+        st.gpr[ECX] = 3;
+        st.gpr[ESI] = DATA + 0x1400;
+        let data: Vec<u8> = (0..0x2000u32).map(|i| (i * 7 + 3) as u8).collect();
+        check(name, &code, &st, &data, flags::ARITH);
+    }
+}
+
 /// Calls into the thunk stub range leave the engine with Exit::Stub; the host
 /// returns by popping the return address. Many round trips through the
 /// dispatcher (block cache lookups, lazy flags dropped at the stub exit).
