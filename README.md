@@ -95,7 +95,7 @@ Native CPU core (`build/arm64-dxcpu`):
 
 | Variable | Effect |
 | --- | --- |
-| `DXCPU_TSO=0` | turn off x86 memory ordering (on by default: barriers around guest loads/stores, stack and `[ebp-x]` locals excepted). Faster by ~11%, but HR then crashes in its job system on about every other level load; `tests/guest/litmus.c` shows the reordering. `DXCPU_TSO=rcpc` uses ldapr/stlr instead of barriers (not faster on M-series), `DXCPU_TSO_EBP=0` keeps barriers on `[ebp-x]` |
+| `DXCPU_TSO=0` | turn off x86 memory ordering (on by default: barriers around guest loads/stores, none between a load and an address-dependent load; stack, `[ebp-x]` locals and `[ebp+x]` after `mov ebp, esp` excepted). Faster by ~11%, but HR then crashes in its job system on about every other level load; `tests/guest/litmus.c` shows the reordering. `DXCPU_TSO=rcpc` uses ldapr/stlr instead of barriers (not faster on M-series), `DXCPU_TSO_EBP=0` keeps barriers on `[ebp±x]` |
 | `DXCPU_STATS=10` | every 10 s: dispatcher entries and the most interpreted instructions; `DXCPU_STATS_ADDR=Mnemonic` adds the addresses |
 | `DXCPU_VERIFY=1` | run every block in the interpreter as well and report blocks whose results differ (slow; shared-memory races show up as noise) |
 | `DXCPU_JIT_OFF=sse,fast,int,x87,all,m:Add+Shl` | interpret selected instruction groups (bisecting translation bugs) |

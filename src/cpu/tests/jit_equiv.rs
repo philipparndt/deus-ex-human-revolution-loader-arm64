@@ -178,6 +178,37 @@ fn carry_kept_by_inc_dec() {
     }
 }
 
+/// Stores at every alignment, including ones that cross a 16-byte boundary
+/// (TSO store-release has to take its fallback path there).
+#[test]
+fn unaligned_stores() {
+    for off in 0..20i32 {
+        let code = asm(|a| {
+            a.mov(dword_ptr(ebx + off), eax)?;
+            a.mov(word_ptr(ebx + off + 32), cx)?;
+            a.mov(byte_ptr(ebx + off + 64), dl)?;
+            a.add(dword_ptr(ebx + off + 96), esi)?;
+            a.movss(dword_ptr(ebx + off + 128), xmm0)?;
+            a.movsd_2(qword_ptr(ebx + off + 160), xmm1)?;
+            a.movups(xmmword_ptr(ebx + off + 192), xmm2)?;
+            a.movq(qword_ptr(ebx + off + 224), xmm3)?;
+            a.fld(dword_ptr(ebx + 252))?;
+            a.fst(dword_ptr(ebx + off + 8))?;
+            a.fstp(qword_ptr(ebx + off + 40))?;
+            a.mov(eax, dword_ptr(ebx + off + 96))
+        });
+        let mut st = state();
+        st.gpr[EAX] = 0x1122_3344;
+        st.gpr[ECX] = 0x5566;
+        st.gpr[EDX] = 0x77;
+        st.gpr[ESI] = 0x0102_0304;
+        for i in 0..4 {
+            set_ps(&mut st, i, [0x3f80_0000 + i as u32, 0xdead_beef, 0x1234_5678, 0xcafe_f00d]);
+        }
+        check(&format!("stores at +{off}"), &code, &st, &[0xa5; 256], flags::ARITH);
+    }
+}
+
 /// Calls into the thunk stub range leave the engine with Exit::Stub; the host
 /// returns by popping the return address. Many round trips through the
 /// dispatcher (block cache lookups, lazy flags dropped at the stub exit).
@@ -224,4 +255,74 @@ fn thunk_round_trips() {
     }
     assert_eq!(results[0].3.len(), 50);
     assert!(results[0] == results[1], "thunk round trips differ");
+}
+
+/// Barrier placement under DXCPU_TSO (default): counts of load barriers (dmb
+/// ishld) and ordered stores (dmb ishst or stlr) in the block body.
+#[test]
+fn tso_barrier_shapes() {
+    if dxcpu::jit::tso_mode() != 2 {
+        return;
+    }
+    const DMB_ISHLD: u32 = 0xd503_39bf;
+    const DMB_ISHST: u32 = 0xd503_3abf;
+    let shape = |f: &dyn Fn(&mut CodeAssembler) -> Result<(), IcedError>| {
+        let code = asm(|a| f(a));
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut m = vec![0u8; MEM];
+        m[CODE as usize..CODE as usize + code.len()].copy_from_slice(&code);
+        mem::set_base(m.as_mut_ptr());
+        let (w, body) = dxcpu::jit::Jit::new(0xFFFF_0000, 0xFFFF_0010).translate_words(CODE);
+        mem::set_base(std::ptr::null_mut());
+        let w = &w[..body];
+        let ld = w.iter().filter(|&&x| x == DMB_ISHLD).count();
+        let st = w.iter().filter(|&&x| x == DMB_ISHST || x & 0x3fff_fc00 == 0x089f_fc00).count();
+        (ld, st)
+    };
+    // address-dependent load chain: one barrier after the last load
+    assert_eq!(
+        shape(&|a| {
+            a.mov(ecx, dword_ptr(ebx + 8))?;
+            a.mov(eax, dword_ptr(ecx + 4))?;
+            a.movss(xmm0, dword_ptr(eax + ecx * 4))
+        }),
+        (1, 0)
+    );
+    // independent loads keep theirs
+    assert_eq!(
+        shape(&|a| {
+            a.mov(ecx, dword_ptr(ebx + 8))?;
+            a.mov(eax, dword_ptr(esi + 4))
+        }),
+        (2, 0)
+    );
+    // a store in between: no elision
+    assert_eq!(
+        shape(&|a| {
+            a.mov(ecx, dword_ptr(ebx))?;
+            a.mov(dword_ptr(edi), eax)?;
+            a.mov(eax, dword_ptr(ecx))
+        }),
+        (2, 1)
+    );
+    // the next load is a stack access without its own barrier: no elision
+    assert_eq!(
+        shape(&|a| {
+            a.mov(ebp, dword_ptr(ebx))?;
+            a.mov(eax, dword_ptr(ebp - 8))
+        }),
+        (1, 0)
+    );
+    // after `mov ebp, esp`, [ebp + x] is a stack access; not once EBP changed
+    assert_eq!(
+        shape(&|a| {
+            a.push(ebp)?;
+            a.mov(ebp, esp)?;
+            a.mov(eax, dword_ptr(ebp + 8))?;
+            a.mov(dword_ptr(ebp + 12), eax)?;
+            a.pop(ebp)?;
+            a.mov(ecx, dword_ptr(ebp + 8))
+        }),
+        (1, 0)
+    );
 }

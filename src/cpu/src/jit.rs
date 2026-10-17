@@ -306,17 +306,19 @@ pub fn code_changed(addr: u32, len: u32) -> bool {
 /// (lock-free lists published with plain stores; measured with the autoplay
 /// bot: 4 crashes in 8 loads without, 0 in 8 with, at ~11% lower frame rate).
 /// ARM may reorder plain loads and stores; x86 only lets a later load pass an
-/// earlier store. Loads get
-/// dmb ishld after them, stores dmb ishst before them (ESP-based accesses
-/// excepted), the interpreter fences likewise (mem.rs). litmus.c shows the
-/// difference (message passing).
+/// earlier store. Loads get dmb ishld after them (unless the next instruction
+/// loads from an address computed from the loaded value: load_feeds_next_load),
+/// stores dmb ishst before them, stack accesses excepted (see Translator::ea);
+/// the interpreter fences likewise (mem.rs). litmus.c shows the difference
+/// (message passing).
 /// DXCPU_TSO=rcpc: loads as ldapr, stores as stlr instead (RCpc acquire /
 /// release is exactly TSO; vector data goes through x16). Measured on M-series:
 /// no faster than the barriers (bench.c float part slower), kept for comparison.
 pub fn tso_on() -> bool {
     tso_mode() != 0
 }
-/// DXCPU_TSO_EBP=0: [ebp - x] accesses keep their barriers too.
+/// DXCPU_TSO_EBP=0: [ebp - x] accesses (and [ebp + x] after `mov ebp, esp`)
+/// keep their barriers too.
 fn tso_ebp_local() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("DXCPU_TSO_EBP").map(|v| v != "0").unwrap_or(true))
@@ -569,7 +571,9 @@ impl Jit {
         t.begin(eip, loop_regs, loop_cf);
         for (i, insn) in insns.iter().enumerate() {
             let live = flags_live_after(&insns, i);
+            t.ld_dep_next = t.tso && load_feeds_next_load(insn, insns.get(i + 1));
             let cont = t.insn(insn, live);
+            t.ld_dep_next = false;
             if !cont {
                 break;
             }
@@ -717,6 +721,44 @@ fn flags_live_after(insns: &[Instruction], i: usize) -> bool {
     }
 }
 
+/// TSO: may the barrier after the load of `a` be left out because `b`, the
+/// next instruction, loads from an address computed from the register `a`
+/// loaded? An address dependency orders two loads on ARM (no barrier needed
+/// between them), and the barrier after b's load then orders both before
+/// everything later; nothing accesses memory in between. Only plain moves
+/// whose translation is exactly "load, barrier" qualify (no prefixes, which
+/// could send them to the interpreter).
+fn load_feeds_next_load(a: &Instruction, b: Option<&Instruction>) -> bool {
+    use Mnemonic::*;
+    let Some(b) = b else { return false };
+    let plain = |i: &Instruction| {
+        i.op_count() == 2
+            && i.op0_kind() == OpKind::Register
+            && i.op1_kind() == OpKind::Memory
+            && i.segment_prefix() == Register::None
+            && !i.has_lock_prefix()
+            && !i.has_rep_prefix()
+            && !i.has_repne_prefix()
+            && !jit_off_mnemonic(i.mnemonic())
+    };
+    if jit_off() != 0 || !plain(a) || !plain(b) || !matches!(a.mnemonic(), Mov | Movzx | Movsx) {
+        return false;
+    }
+    let r = a.op0_register();
+    if r.size() != 4 || !is_gpr(r) || r == Register::ESP {
+        return false;
+    }
+    let b_ok = match b.mnemonic() {
+        Mov | Movzx | Movsx => is_gpr(b.op0_register()),
+        Movaps | Movups | Movapd | Movupd | Movdqa | Movdqu | Movss | Movsd => b.op0_register().is_xmm(),
+        _ => false,
+    };
+    let (base, index) = (b.memory_base(), b.memory_index());
+    // b's load must get its own barrier: not a stack access (see Translator::ea)
+    let b_stack = matches!(base, Register::ESP | Register::EBP);
+    b_ok && !b_stack && (base == r || index == r)
+}
+
 // --- per-block translator ----------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
@@ -769,6 +811,11 @@ struct Translator {
     tso: bool,
     /// The last effective address computed by ea() is ESP-based (thread-local stack).
     ea_stack: bool,
+    /// The current instruction's load needs no barrier (load_feeds_next_load).
+    ld_dep_next: bool,
+    /// EBP holds a stack address: `mov ebp, esp` earlier in the block and EBP
+    /// not written since (TSO: [ebp + x] is a stack access).
+    ebp_frame: bool,
     a: Asm,
     start: usize,
     exit_addr: usize,
@@ -818,6 +865,8 @@ impl Translator {
         Translator {
             tso: tso_on(),
             ea_stack: false,
+            ld_dep_next: false,
+            ebp_frame: false,
             a: Asm::new(),
             start,
             exit_addr,
@@ -1156,7 +1205,7 @@ impl Translator {
     }
 
     fn tso_after_load(&mut self) {
-        if self.tso && !self.ea_stack {
+        if self.tso && !self.ea_stack && !self.ld_dep_next {
             self.a.dmb_ishld();
         }
     }
@@ -1673,8 +1722,12 @@ impl Translator {
         // rare). Skipping their barriers keeps the ordering of everything else:
         // the dmb after a load orders it before all later accesses, the dmb
         // before a store all earlier stores before it.
+        // Also any [ebp + ...] after `mov ebp, esp` in this block: EBP then is the
+        // frame pointer, these are arguments and locals like [esp + x].
         self.ea_stack = base == Register::ESP
-            || (base == Register::EBP && index == Register::None && (disp as i32) < 0 && tso_ebp_local());
+            || (base == Register::EBP
+                && tso_ebp_local()
+                && (self.ebp_frame || (index == Register::None && (disp as i32) < 0)));
         let mut have = false;
         if base != Register::None && index == Register::None {
             // [base + disp]: one instruction when the displacement fits an add/sub immediate
@@ -1982,6 +2035,13 @@ impl Translator {
         let r = self.insn_inner(insn, flags_live);
         if insn.rflags_modified() != 0 {
             self.fc_cf = false;
+        }
+        if may_write_ebp(insn) {
+            self.ebp_frame = insn.mnemonic() == Mnemonic::Mov
+                && insn.op0_kind() == OpKind::Register
+                && insn.op0_register() == Register::EBP
+                && insn.op1_kind() == OpKind::Register
+                && insn.op1_register() == Register::ESP;
         }
         r
     }
@@ -3446,6 +3506,14 @@ fn cc_base(m: Mnemonic) -> (Mnemonic, bool) {
 
 fn xidx(r: Register) -> u32 {
     r as u32 - Register::XMM0 as u32
+}
+
+/// Conservative: any register operand that is (part of) EBP, or an implicit writer.
+fn may_write_ebp(insn: &Instruction) -> bool {
+    use Mnemonic::*;
+    matches!(insn.mnemonic(), Leave | Enter | Popa | Popad)
+        || (0..insn.op_count())
+            .any(|i| insn.op_kind(i) == OpKind::Register && insn.op_register(i).full_register32() == Register::EBP)
 }
 
 fn is_gpr(r: Register) -> bool {
