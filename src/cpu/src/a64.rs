@@ -337,6 +337,12 @@ impl Asm {
         self.emit(0x3500_0000 | rt);
         f
     }
+    /// tbnz wt, #bit (range +-8K instructions)
+    pub fn tbnz_w_fixup(&mut self, rt: u32, bit: u32) -> Fixup {
+        let f = Fixup { pos: self.pos(), kind: 2 };
+        self.emit(0x3700_0000 | (bit << 19) | rt);
+        f
+    }
     /// Point a fixup at the current position.
     pub fn bind(&mut self, f: Fixup) {
         let here = self.pos();
@@ -347,6 +353,10 @@ impl Asm {
         let w = &mut self.code[f.pos];
         match f.kind {
             0 => *w |= (off as u32) & 0x03ff_ffff,
+            2 => {
+                assert!((-0x2000..0x2000).contains(&off), "tbz/tbnz target out of range");
+                *w |= ((off as u32) & 0x3fff) << 5
+            }
             _ => *w |= ((off as u32) & 0x7ffff) << 5,
         }
     }

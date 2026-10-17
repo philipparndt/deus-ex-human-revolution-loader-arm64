@@ -308,9 +308,10 @@ pub fn code_changed(addr: u32, len: u32) -> bool {
 /// ARM may reorder plain loads and stores; x86 only lets a later load pass an
 /// earlier store. Loads get dmb ishld after them (unless the next instruction
 /// loads from an address computed from the loaded value: load_feeds_next_load),
-/// stores dmb ishst before them, stack accesses excepted (see Translator::ea);
-/// the interpreter fences likewise (mem.rs). litmus.c shows the difference
-/// (message passing).
+/// stores are store-releases (stlr; dmb ishst + str for 16-byte vectors and
+/// stores that cross a 16-byte boundary), stack accesses excepted (see
+/// Translator::ea). The interpreter fences with dmb ishld / dmb ishst (mem.rs).
+/// litmus.c shows the difference (message passing).
 /// DXCPU_TSO=rcpc: loads as ldapr, stores as stlr instead (RCpc acquire /
 /// release is exactly TSO; vector data goes through x16). Measured on M-series:
 /// no faster than the barriers (bench.c float part slower), kept for comparison.
@@ -437,6 +438,10 @@ pub struct Jit {
 }
 
 const BUF_SIZE: usize = 64 << 20;
+/// A block ends after the instruction that makes its body longer than this
+/// (words); with one instruction's code and the split-store cold paths that
+/// follow the body first, they stay within tbnz range (+-8K words).
+const MAX_BODY: usize = 4000;
 
 impl Jit {
     pub fn new(stub_lo: u32, stub_hi: u32) -> Self {
@@ -577,7 +582,8 @@ impl Jit {
             if !cont {
                 break;
             }
-            if i + 1 == insns.len() {
+            // Bounded body: cold paths must stay in tbnz range (store_split_check).
+            if i + 1 == insns.len() || t.a.pos() > MAX_BODY {
                 t.seg_end();
                 t.exit_direct_flags(insn.next_ip32());
             }
@@ -776,6 +782,11 @@ enum ColdKind {
     Cond(u32),
     /// x86_nan_fixup(r, a, b) of a single-precision op whose result has a NaN lane.
     NanFix(u32, Option<u32>, u32),
+    /// Store (size, register, address register) that crosses a 16-byte
+    /// boundary (store_split_check): dmb ishst + str instead of stlr.
+    Store(u32, u32, u32),
+    /// Likewise for a vector register.
+    VStore(u32, u32, u32),
 }
 
 #[derive(Clone)]
@@ -988,6 +999,21 @@ impl Translator {
     /// Emit the cold paths and the literal pool after the block body.
     fn finish(&mut self) {
         debug_assert!(self.seg.is_none());
+        // Split stores first: their tbnz has the shortest range. Like the NaN
+        // fixups they are native (no helper call, registers as at the branch).
+        let (split, colds): (Vec<Cold>, Vec<Cold>) = std::mem::take(&mut self.cold)
+            .into_iter()
+            .partition(|c| matches!(c.kind, ColdKind::Store(..) | ColdKind::VStore(..)));
+        for c in split {
+            self.a.bind(c.fix);
+            self.a.dmb_ishst();
+            match c.kind {
+                ColdKind::Store(size, rs, wm) => self.a.str_uxtw(size, rs, BASE, wm),
+                ColdKind::VStore(size, vs, wm) => self.a.str_v_uxtw(size, vs, BASE, wm),
+                _ => unreachable!(),
+            }
+            self.a.b_to(c.resume);
+        }
         for (f, target) in std::mem::take(&mut self.exit_stubs) {
             self.a.bind(f);
             self.a.mov_w_imm(T0, target);
@@ -995,11 +1021,9 @@ impl Translator {
             self.a.mov_w_imm(0, EXIT_DISPATCH);
             self.b_exit();
         }
-        let colds = std::mem::take(&mut self.cold);
         for c in colds {
             self.a.bind(c.fix);
             if let ColdKind::NanFix(r, a, b) = c.kind {
-                // native, no helper call: registers are as at the branch
                 self.x86_nan_fixup(r, a, b);
                 self.a.b_to(c.resume);
                 continue;
@@ -1034,7 +1058,7 @@ impl Translator {
                         self.a.ldp_w(G[2 * i as usize], G[2 * i as usize + 1], CTX, 8 * i);
                     }
                 }
-                ColdKind::NanFix(..) => unreachable!(),
+                ColdKind::NanFix(..) | ColdKind::Store(..) | ColdKind::VStore(..) => unreachable!(),
                 ColdKind::Cond(m) => {
                     self.a.mov_x(0, CTX);
                     self.a.mov_w_imm(1, *m);
@@ -1060,7 +1084,7 @@ impl Translator {
                     self.a.cmp_w(0, XZR);
                     self.a.b_to(c.resume);
                 }
-                ColdKind::NanFix(..) => unreachable!(),
+                ColdKind::NanFix(..) | ColdKind::Store(..) | ColdKind::VStore(..) => unreachable!(),
             }
         }
         let consts = std::mem::take(&mut self.consts);
@@ -1149,14 +1173,38 @@ impl Translator {
             self.tso_after_load();
         }
     }
-    /// Integer store of rs to guest memory [BASE + wm] (TSO aware).
+    /// Integer store of rs to guest memory [BASE + wm] (TSO aware). Also with
+    /// barriers (DXCPU_TSO default) a store-release: stlr orders all earlier
+    /// loads and stores before the store (what dmb ishst + str and the earlier
+    /// loads' dmb ishld give) at about half the cost of the barrier on M1.
     fn gst(&mut self, size: u32, rs: u32, wm: u32) {
-        if self.tso && !self.ea_stack && tso_mode() == 1 {
-            self.a.add_x_uxtw(TA, BASE, wm);
-            self.a.stlr(size, rs, TA);
-        } else {
-            self.tso_before_store();
+        if !(self.tso && !self.ea_stack) {
             self.a.str_uxtw(size, rs, BASE, wm);
+            return;
+        }
+        let split = self.store_split_check(size, wm);
+        self.a.add_x_uxtw(TA, BASE, wm);
+        self.a.stlr(size, rs, TA);
+        self.store_split_cold(split, ColdKind::Store(size, rs, wm));
+    }
+
+    /// stlr requires the access to stay within an aligned 16-byte block (it
+    /// faults otherwise, also with FEAT_LSE2) while x86 stores may be anywhere:
+    /// branch to a cold path if the 2^size bytes at wm cross a 16-byte
+    /// boundary. Uses TD (x16).
+    fn store_split_check(&mut self, size: u32, wm: u32) -> Option<Fixup> {
+        if size == 0 {
+            return None;
+        }
+        self.a.add_w_imm(TD, wm, (1 << size) - 1);
+        self.a.eor_w(TD, TD, wm);
+        Some(self.a.tbnz_w_fixup(TD, 4))
+    }
+
+    /// The cold path of store_split_check: the store with dmb ishst before it.
+    fn store_split_cold(&mut self, split: Option<Fixup>, kind: ColdKind) {
+        if let Some(fix) = split {
+            self.cold.push(Cold { fix, kind, dirty: 0, saved: 0, valid: 0, resume: self.a.pos() });
         }
     }
 
@@ -1182,19 +1230,24 @@ impl Translator {
             self.a.ins_gen(3, vt, 1, TD);
         }
     }
-    /// SIMD store to guest memory [BASE + wm], TSO aware (see vld).
+    /// SIMD store to guest memory [BASE + wm], TSO aware (see vld). With
+    /// barriers S and D go through TD as a store-release (see gst), Q keeps
+    /// dmb ishst (two checked stlr cost more instructions than they save).
     fn vst(&mut self, size: u32, vs: u32, wm: u32) {
-        if !(self.tso && !self.ea_stack && tso_mode() == 1) {
+        if !(self.tso && !self.ea_stack) || (size == 4 && tso_mode() != 1) {
             self.tso_before_store();
             self.a.str_v_uxtw(size, vs, BASE, wm);
             return;
         }
-        self.a.add_x_uxtw(TA, BASE, wm);
-        if size == 2 {
-            self.a.fmov_w_s(TD, vs);
-            self.a.stlr(2, TD, TA);
+        if size < 4 {
+            let split = self.store_split_check(size, wm);
+            self.a.add_x_uxtw(TA, BASE, wm);
+            if size == 2 { self.a.fmov_w_s(TD, vs) } else { self.a.fmov_x_d(TD, vs) }
+            self.a.stlr(size, TD, TA);
+            self.store_split_cold(split, ColdKind::VStore(size, vs, wm));
             return;
         }
+        self.a.add_x_uxtw(TA, BASE, wm);
         self.a.fmov_x_d(TD, vs);
         self.a.stlr(3, TD, TA);
         if size == 4 {
