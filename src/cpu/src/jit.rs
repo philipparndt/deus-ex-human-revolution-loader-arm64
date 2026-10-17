@@ -574,9 +574,19 @@ impl Jit {
         }
         let loop_cf = self_loop && insns.iter().any(|i| matches!(i.mnemonic(), Mnemonic::Inc | Mnemonic::Dec));
         t.begin(eip, loop_regs, loop_cf);
+        // per instruction: does its run of segment candidates have a deferred NaN check?
+        let mut seg_checks = vec![false; insns.len()];
+        let mut j = 0;
+        while j < insns.len() {
+            let k = j + insns[j..].iter().take_while(|x| Translator::seg_candidate(x)).count();
+            let any = insns[j..k].iter().any(seg_check_user);
+            seg_checks[j..k].fill(any);
+            j = k.max(j + 1);
+        }
         for (i, insn) in insns.iter().enumerate() {
             let live = flags_live_after(&insns, i);
             t.ld_dep_next = t.tso && load_feeds_next_load(insn, insns.get(i + 1));
+            t.seg_checks = seg_checks[i];
             t.defer_flags = i + 2 == insns.len() && insns[i + 1].flow_control() == FlowControl::ConditionalBranch;
             let cont = t.insn(insn, live);
             t.ld_dep_next = false;
@@ -873,6 +883,9 @@ struct Translator {
     /// an exit stores the descriptor (flush_flags copies them from `pend`).
     defer_flags: bool,
     pend: Option<PendFlags>,
+    /// The run of segment candidates the current instruction belongs to
+    /// contains a float op with a deferred NaN check (seg_check).
+    seg_checks: bool,
     /// SSE floating point may be translated (MXCSR control bits are the default).
     fp_ok: bool,
     /// Guest xmm registers cached in v16..v23 (bit i = xmm i), and those modified
@@ -922,6 +935,7 @@ impl Translator {
             dirty: false,
             defer_flags: false,
             pend: None,
+            seg_checks: true,
             fp_ok,
             xvalid: 0,
             xdirty: 0,
@@ -1140,8 +1154,9 @@ impl Translator {
         if let Some(seg) = &mut self.seg {
             if seg.modified & (1 << i) == 0 {
                 seg.modified |= 1 << i;
-                if dirty {
-                    // clean registers still have their old value in CpuState
+                // clean registers still have their old value in CpuState; without a
+                // deferred NaN check in the segment there is no re-execution
+                if dirty && self.seg_checks {
                     seg.saved |= 1 << i;
                     self.a.vmov(SAVE + i, VX + i);
                 }
@@ -1152,6 +1167,7 @@ impl Translator {
     /// Record the NaN mask of a float result (lanes of `r` that the instruction
     /// wrote; other lanes must not be NaN, e.g. zeroed by a scalar op).
     fn seg_check(&mut self, dbl: bool, r: u32) {
+        debug_assert!(self.seg_checks, "seg_check_user misses an instruction");
         let seg = self.seg.as_mut().expect("float op outside a segment");
         if seg.checked {
             self.a.fcmeq_v(dbl, V2, r, r);
@@ -1167,13 +1183,17 @@ impl Translator {
     /// operand), and invalid operations on non-NaN inputs give the x86 default
     /// NaN 0xffc00000 instead of 0x7fc00000. `a` = first operand (None for sqrt),
     /// `b` = second/only source; neither may alias `r`. Uses V2, V5, V6.
-    /// x86_nan_fixup on a cold path, taken only if some lane of `r` is NaN (the
-    /// fixup only changes NaN lanes). Keeps the fixup's dependency chain and
+    /// x86_nan_fixup on a cold path, taken only if some lane of `r` (scalar: the
+    /// low lane) is NaN (the fixup only changes NaN lanes). Keeps the fixup's dependency chain and
     /// instructions off the hot path; `r`, `a` and `b` must stay unchanged until
     /// the next instruction. Uses V2 and T1.
-    fn x86_nan_check(&mut self, r: u32, a: Option<u32>, b: u32) {
-        self.a.fcmeq_v(false, V2, r, r);
-        self.a.uminv_4s(V2, V2);
+    fn x86_nan_check(&mut self, scalar: bool, r: u32, a: Option<u32>, b: u32) {
+        if scalar {
+            self.a.emit(0x5e20_e400 | (r << 16) | (r << 5) | V2); // fcmeq s2, sr, sr
+        } else {
+            self.a.fcmeq_v(false, V2, r, r);
+            self.a.uminv_4s(V2, V2);
+        }
         self.a.fmov_w_s(T1, V2);
         let fix = self.a.cbz_w_fixup(T1);
         let c = Cold { fix, kind: ColdKind::NanFix(r, a, b), dirty: 0, saved: 0, valid: 0, resume: self.a.pos() };
@@ -3127,7 +3147,7 @@ impl Translator {
                     (_, false) => self.a.fsqrt_v(dbl, r, vs),
                 }
                 if exact {
-                    self.x86_nan_check(r, if sqrt { None } else { Some(a) }, b);
+                    self.x86_nan_check(scalar, r, if sqrt { None } else { Some(a) }, b);
                 } else {
                     // scalar ops zero the upper lanes of V0, so a full-width check is fine
                     self.seg_check(dbl, r);
@@ -3618,6 +3638,17 @@ fn cc_base(m: Mnemonic) -> (Mnemonic, bool) {
 
 fn xidx(r: Register) -> u32 {
     r as u32 - Register::XMM0 as u32
+}
+
+/// SSE instructions whose translation records a deferred NaN check (seg_check):
+/// double-precision arithmetic and the horizontal / alternating add & sub.
+fn seg_check_user(insn: &Instruction) -> bool {
+    use Mnemonic::*;
+    matches!(
+        insn.mnemonic(),
+        Addpd | Addsd | Subpd | Subsd | Mulpd | Mulsd | Divpd | Divsd | Sqrtpd | Sqrtsd | Haddps | Haddpd | Hsubps
+            | Hsubpd | Addsubps | Addsubpd
+    )
 }
 
 /// Conservative: any register operand that is (part of) EBP, or an implicit writer.
