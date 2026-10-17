@@ -1814,15 +1814,15 @@ impl Translator {
         // Inline lookup in the indirect branch target cache; a hit enters the
         // block directly (same entry state as a linked direct exit).
         self.a.eor_w_lsr(T1, r, r, 11);
-        self.a.ubfx_w(T1, T1, 0, IBTC_BITS);
-        self.a.lsl_w_imm(T1, T1, 4);
+        // ubfiz w1, w1, #4, #IBTC_BITS: entry offset (16-byte entries)
+        self.a.emit(0x5300_0000 | (28 << 16) | ((IBTC_BITS - 1) << 10) | (T1 << 5) | T1);
         self.a.ldr_imm(3, T2, CTX, OFF_IBTC);
         self.a.add_x(T2, T2, T1);
-        self.a.ldr_imm(2, T3, T2, 0);
+        // ldp x3, x2, [x2]: eip (low word of x3) and code together
+        self.a.emit(0xa940_0000 | (T2 << 10) | (T2 << 5) | T3);
         self.a.cmp_w(T3, r);
         let miss = self.a.bcond_fixup(Cond::Ne);
-        self.a.ldr_imm(3, T3, T2, 8);
-        self.a.br(T3);
+        self.a.br(T2);
         self.a.bind(miss);
         self.a.str_imm(2, r, CTX, OFF_EIP);
         self.a.mov_w_imm(0, EXIT_DISPATCH);
