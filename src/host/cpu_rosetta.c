@@ -4,6 +4,7 @@
 // x86_64 host binary linked with a small __PAGEZERO so the low 4 GB are free.
 #include "cpu.h"
 #include "log.h"
+#include "spikes.h"
 
 #include <architecture/i386/desc.h>
 #include <i386/user_ldt.h>
@@ -156,7 +157,9 @@ void cpu_call_ex(gaddr_t fn, int nargs, const uint32_t *args, bool fp_ret, struc
     frame.prev = rosetta_cur_frame;
     frame.fp = fp_ret;
     rosetta_cur_frame = &frame;
+    uint32_t spk = spikes_on ? spikes_guest_enter() : 0;
     rosetta_enter32(fn, sp, &frame);
+    if (spikes_on) spikes_guest_exit(spk);
     rosetta_cur_frame = frame.prev;
     if (out) {
         out->ret = frame.ret;
@@ -170,7 +173,10 @@ uint64_t cpu_call(gaddr_t fn, int nargs, const uint32_t *args) {
     return r.ret;
 }
 
-void cpu_start(gaddr_t eip, gaddr_t esp) { rosetta_jump32(eip, esp); }
+void cpu_start(gaddr_t eip, gaddr_t esp) {
+    if (spikes_on) spikes_guest_enter();
+    rosetta_jump32(eip, esp);
+}
 
 bool cpu_crash_regs(uint32_t *eip, uint32_t *esp, uint32_t *ebp, uint32_t regs[8]) {
     (void)eip, (void)esp, (void)ebp, (void)regs;

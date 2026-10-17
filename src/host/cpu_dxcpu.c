@@ -5,6 +5,7 @@
 #include "dxcpu.h"
 #include "log.h"
 #include "macho.h"
+#include "spikes.h"
 #include "thunk.h"
 
 #include <pthread.h>
@@ -259,7 +260,9 @@ void cpu_call_ex(gaddr_t fn, int nargs, const uint32_t *args, bool fp_ret, struc
     t->in_thunk = false;
     dxcpu_set_reg(s, DXR_ESP, sp);
     dxcpu_set_reg(s, DXR_EIP, fn);
+    uint32_t spk = spikes_on ? spikes_guest_enter() : 0;
     run_until(depth, marker);
+    if (spikes_on) spikes_guest_exit(spk);
     t->depth = prev_depth;
     t->in_thunk = prev_in;
     if (out) {
@@ -281,6 +284,7 @@ void cpu_start(gaddr_t eip, gaddr_t esp) {
     t->in_thunk = false;
     dxcpu_set_reg(t->st[0], DXR_ESP, esp);
     dxcpu_set_reg(t->st[0], DXR_EIP, eip);
+    if (spikes_on) spikes_guest_enter();
     run_until(0, 0xFFFFFFFFu);
     fatal("dxcpu: program entry returned");
 }

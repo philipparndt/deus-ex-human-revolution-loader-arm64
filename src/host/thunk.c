@@ -5,6 +5,7 @@
 #include <time.h>
 #include <string.h>
 
+#include "spikes.h"
 #include "strmap.h"
 
 #include <mach-o/getsect.h>
@@ -69,6 +70,7 @@ void thunks_init(void) {
         defs[i].data_init((gaddr_t)addr);
     }
     LOGI("thunks: %zu functions, %zu data symbols", nfn, ndata);
+    spikes_init();
 }
 
 gaddr_t hostsym_lookup(const char *name) {
@@ -92,6 +94,11 @@ gaddr_t hostsym_missing_stub(const char *name) {
 }
 
 gaddr_t thunk_register_dynamic(const char *name, thunk_fn fn) { return add_thunk(name, fn); }
+
+uint32_t thunk_register_marker(const char *name, thunk_fn fn) {
+    add_thunk(name, fn);
+    return nthunks - 1; // only during thunks_init (single-threaded)
+}
 
 const char *thunk_name(uint32_t id) { return id < nthunks ? thunks[id].name : "?"; }
 
@@ -145,7 +152,7 @@ static void *thunk_stats_thread(void *arg) {
 // DXH_SLOW_MS=<ms>: log every host call that takes longer (frame spikes), except
 // calls whose job is to wait.
 static uint64_t slow_ns;
-static bool is_waiting_call(const char *n) {
+bool thunk_is_waiting_call(const char *n) {
     static const char *const waits[] = {"wait", "sleep", "Sleep", "ReceiveNextEvent", "RunApplicationEventLoop",
                                         "RunAppModalLoop", "RunCurrentEventLoop", "select", "accept", "recv",
                                         "join", "mach_msg", "CFRunLoopRun", "Delay", "nanosleep", "kevent",
@@ -186,11 +193,13 @@ void host_dispatch(struct guest_regs *r) {
             uint64_t n0 = slow_ns ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
             LOGT("-> %s(%#x, %#x, %#x, %#x) ret=%#x", thunks[id].name, gread32(r->esp + 4), gread32(r->esp + 8),
                  gread32(r->esp + 12), gread32(r->esp + 16), gread32(r->esp));
+            if (spikes_on) spikes_thunk_enter(id, r);
             thunks[id].fn(r);
+            if (spikes_on) spikes_thunk_exit();
             atomic_fetch_add_explicit(&thunk_ticks[id], mach_absolute_time() - t0, memory_order_relaxed);
             if (slow_ns) {
                 uint64_t dt = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - n0;
-                if (dt > slow_ns && !is_waiting_call(thunks[id].name)) {
+                if (dt > slow_ns && !thunk_is_waiting_call(thunks[id].name)) {
                     char tn[64] = "";
                     pthread_getname_np(pthread_self(), tn, sizeof tn);
                     LOGI("slow call: %s %.1f ms (%s%sargs %#x %#x %#x)", thunks[id].name, dt / 1e6, tn,
@@ -207,5 +216,7 @@ void host_dispatch(struct guest_regs *r) {
     if (id >= nthunks) fatal("bad thunk id %u", id);
     LOGT("-> %s(%#x, %#x, %#x, %#x) ret=%#x", thunks[id].name, gread32(r->esp + 4), gread32(r->esp + 8),
          gread32(r->esp + 12), gread32(r->esp + 16), gread32(r->esp));
+    if (spikes_on) spikes_thunk_enter(id, r);
     thunks[id].fn(r);
+    if (spikes_on) spikes_thunk_exit();
 }

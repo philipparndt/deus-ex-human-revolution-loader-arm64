@@ -9,6 +9,7 @@
 // while a thunk runs) use another engine per nesting depth.
 #include "cpu.h"
 #include "log.h"
+#include "spikes.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -236,7 +237,9 @@ void cpu_call_ex(gaddr_t fn, int nargs, const uint32_t *args, bool fp_ret, struc
     t->depth = depth;
     t->in_thunk = false;
     wr(uc, UC_X86_REG_ESP, sp);
+    uint32_t spk = spikes_on ? spikes_guest_enter() : 0;
     uc_err e = uc_emu_start(uc, fn, marker, 0, 0);
+    if (spikes_on) spikes_guest_exit(spk);
     if (e) {
         uint32_t eip = rd(uc, UC_X86_REG_EIP);
         fatal("unicorn: guest fault at eip=%#x esp=%#x: %s", eip, rd(uc, UC_X86_REG_ESP), uc_strerror(e));
@@ -261,6 +264,7 @@ void cpu_start(gaddr_t eip, gaddr_t esp) {
     t->depth = 0;
     t->in_thunk = false;
     wr(uc, UC_X86_REG_ESP, esp);
+    if (spikes_on) spikes_guest_enter();
     uc_err e = uc_emu_start(uc, eip, 0, 0, 0);
     fatal("unicorn: program entry returned (eip=%#x): %s", rd(uc, UC_X86_REG_EIP), uc_strerror(e));
 }

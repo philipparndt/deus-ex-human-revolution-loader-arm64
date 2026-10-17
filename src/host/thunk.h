@@ -70,3 +70,7 @@ const char *thunk_name(uint32_t id);
 
 // Register a host function under a synthetic name at runtime (callbacks etc.).
 gaddr_t thunk_register_dynamic(const char *name, thunk_fn fn);
+// The same during thunks_init, returning the thunk id (accounting markers).
+uint32_t thunk_register_marker(const char *name, thunk_fn fn);
+// Host calls whose job is to wait (sleep, condition/semaphore waits, ...), by name.
+bool thunk_is_waiting_call(const char *name);

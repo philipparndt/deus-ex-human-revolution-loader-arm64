@@ -83,6 +83,7 @@ Useful environment variables:
 | `DXH_LOG=0..3`, `DXH_LOG_FILE=path` | log level (3 = trace every host call) and log file; `kill -USR1/-USR2 <pid>` toggles tracing at runtime |
 | `DXH_LANGUAGE=german` | override the game language |
 | `DXH_FPS=5` | frames/s, worst frame and frames over 33 ms every 5 s |
+| `DXH_SPIKES=80` | for every presented frame slower than 80 ms, log where it went (`spike:` lines): the frame thread's guest / host / waiting time, its top host calls and longest call (for a condition wait: which thread signalled it), the busiest other guest threads, and texture/buffer uploads, shader compiles, GPU syncs, file access, inflate jobs and main-queue work in that frame (about 25 ns per host call while on) |
 | `DXH_SLOW_MS=10` | log every host call slower than 10 ms (frame spikes), except calls that are meant to wait |
 | `DXH_THUNK_STATS=10`, `DXH_GL_STATS=1` | periodic host call / buffer mapping statistics |
 | `DXH_WATCHDOG=10` | if the main thread hangs for 10 s, log every guest thread's host call and guest frames |

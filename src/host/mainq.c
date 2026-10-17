@@ -10,6 +10,7 @@
 // happens to call the host (e.g. in the middle of an event handler), one that
 // waits for another thread deadlocked HR (found by the autoplay bot).
 #include "mainq.h"
+#include "spikes.h"
 
 #include <dispatch/dispatch.h>
 #include <pthread.h>
@@ -26,6 +27,7 @@ struct mq_item {
     void *ctx;
     bool guest_sync; // guest dispatch_sync: runs after the guest's earlier async items
     uint64_t seq;    // queue order
+    uint64_t queued; // DXH_SPIKES: when it was queued
 };
 
 static pthread_mutex_t mq_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -40,8 +42,10 @@ static void mq_unlink(struct mq_item **link, struct mq_item *it) { // mq_lock he
 }
 
 static void mq_exec(struct mq_item *it) {
+    uint64_t spk = spikes_on ? spikes_mainq_begin(it->done ? it->queued : 0) : 0;
     if (it->fn) it->fn(it->ctx);
     else it->blk();
+    if (spikes_on) spikes_mainq_end(spk);
     if (it->done) dispatch_semaphore_signal(it->done);
     else free(it);
 }
@@ -96,6 +100,7 @@ void mainq_drain_waiting(void) {
 }
 
 static void mq_push(struct mq_item *it) {
+    if (spikes_on) it->queued = spikes_now();
     pthread_mutex_lock(&mq_lock);
     it->seq = ++mq_seq;
     *mq_tail = it;

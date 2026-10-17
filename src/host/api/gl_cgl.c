@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include "gl_internal.h"
+#include "spikes.h"
 #include "gmem.h"
 
 #include <OpenGL/gl3.h>
@@ -408,6 +409,7 @@ THUNK(CGLFlushDrawable) {
     uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     CGLError e = CGLFlushDrawable(CTX(0));
     fps_frame(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0);
+    if (spikes_on) spikes_frame();
     RET(e);
 }
 THUNK(CGLClearDrawable) { RET(CGLClearDrawable(CTX(0))); }
