@@ -364,6 +364,63 @@ fn addressing_modes() {
     }
 }
 
+/// Modified xmm registers at a block-ending branch (written back once before
+/// it) and in a self loop (kept cached across the back edge).
+#[test]
+fn xmm_across_branches() {
+    let code = asm(|a| {
+        let mut lp = a.create_label();
+        let mut skip = a.create_label();
+        a.mulps(xmm0, xmm1)?;
+        a.movaps(xmm2, xmm0)?;
+        a.cmp(eax, ebx)?;
+        a.jl(skip)?;
+        a.addps(xmm2, xmm1)?;
+        a.set_label(&mut skip)?;
+        a.movaps(xmm5, xmm2)?;
+        a.set_label(&mut lp)?;
+        a.addps(xmm0, xmm1)?;
+        a.subss(xmm3, xmm0)?;
+        a.dec(ecx)?;
+        a.jne(lp)?;
+        a.movups(xmmword_ptr(ebx), xmm0)?;
+        a.cmp(eax, 7)?;
+        a.je(STOP as u64)?;
+        a.movaps(xmm4, xmm3)
+    });
+    for (x, y) in [(1u32, 2u32), (5, 3), (7, 7)] {
+        let mut st = state();
+        st.gpr[EAX] = x;
+        st.gpr[EBX] = DATA + 16 * y;
+        st.gpr[ECX] = 3 + y;
+        for i in 0..6 {
+            set_ps(&mut st, i, [0x3f80_0000 + i as u32 * 0x10_0000, 0x4000_0000, 0xbf80_0000, 0x3e80_0000]);
+        }
+        check(&format!("xmm branches {x} {y}"), &code, &st, &[0; 256], flags::ARITH);
+    }
+}
+
+/// pshufd / shufps with every immediate, in place and between registers.
+#[test]
+fn shuffles() {
+    for imm in 0..256u32 {
+        let code = asm(|a| {
+            a.pshufd(xmm1, xmm0, imm)?;
+            a.pshufd(xmm2, xmm2, imm)?;
+            a.shufps(xmm3, xmm3, imm)?;
+            a.shufps(xmm4, xmm0, imm)?;
+            a.pshufd(xmm5, xmmword_ptr(ebx), imm)
+        });
+        let mut st = state();
+        for i in 0..6 {
+            let b = 0x1111_1111 * (i as u32 + 1);
+            set_ps(&mut st, i, [b, b + 0x0101_0101, b + 0x0202_0202, b + 0x0303_0303]);
+        }
+        let data: Vec<u8> = (0..16u8).collect();
+        check(&format!("shuffles {imm:#x}"), &code, &st, &data, flags::ARITH);
+    }
+}
+
 /// Calls into the thunk stub range leave the engine with Exit::Stub; the host
 /// returns by popping the return address. Many round trips through the
 /// dispatcher (block cache lookups, lazy flags dropped at the stub exit).

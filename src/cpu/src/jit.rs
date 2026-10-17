@@ -2754,10 +2754,20 @@ impl Translator {
             }
             Jo | Jno | Jb | Jae | Je | Jne | Jbe | Ja | Js | Jns | Jp | Jnp | Jl | Jge | Jle | Jg => {
                 let c = self.cond(m);
+                // Both exits write back the same xmm registers: once before the
+                // branch (not for a self loop, which keeps them across the back edge).
+                let (next, target) = (insn.next_ip32(), insn.near_branch32());
+                let back = self.loop_head.is_some() && (next == self.block_eip || target == self.block_eip);
+                let dirty = self.xdirty;
+                if !back {
+                    self.xmm_writeback();
+                    self.xdirty = 0;
+                }
                 let taken = self.a.bcond_fixup(c);
-                self.exit_direct_flags(insn.next_ip32());
+                self.exit_direct_flags(next);
                 self.a.bind(taken);
-                self.exit_direct_flags(insn.near_branch32());
+                self.exit_direct_flags(target);
+                self.xdirty = dirty;
                 return false;
             }
             Jmp if insn.op0_kind() == OpKind::NearBranch32 => {
@@ -3472,8 +3482,8 @@ impl Translator {
                 let sel = [imm & 3, (imm >> 2) & 3, (imm >> 4) & 3, (imm >> 6) & 3];
                 let vs = self.xsrc(insn, 1, V1);
                 let vd = self.xmod(xi(0));
-                if vs == vd && sel.iter().all(|&x| x == sel[0]) {
-                    self.a.dup_elem(2, vd, vd, sel[0]);
+                if vs == vd {
+                    self.shuf32(vd, vs, sel);
                 } else {
                     self.a.ins_elem(2, V0, 0, vd, sel[0]);
                     self.a.ins_elem(2, V0, 1, vd, sel[1]);
@@ -3486,16 +3496,8 @@ impl Translator {
                 let imm = insn.immediate8() as u32;
                 let sel = [imm & 3, (imm >> 2) & 3, (imm >> 4) & 3, (imm >> 6) & 3];
                 let vs = self.xsrc(insn, 1, V1);
-                if sel.iter().all(|&x| x == sel[0]) {
-                    let vd = self.xdef(xi(0));
-                    self.a.dup_elem(2, vd, vs, sel[0]);
-                } else {
-                    for (k, &j) in sel.iter().enumerate() {
-                        self.a.ins_elem(2, V0, k as u32, vs, j);
-                    }
-                    let vd = self.xdef(xi(0));
-                    self.a.vmov(vd, V0);
-                }
+                let vd = self.xdef(xi(0));
+                self.shuf32(vd, vs, sel);
             }
             Shufpd => {
                 let imm = insn.immediate8() as u32;
@@ -3629,6 +3631,50 @@ impl Translator {
     }
 
     /// Like load(), but reuse T4 when operand 0 already computed the address.
+    /// vd.s[i] = vs.s[sel[i]] (vd may be vs): one permute instruction for the
+    /// common patterns, dup + ins for one odd lane, else tbl with an index
+    /// vector from the literal pool. Uses V2.
+    fn shuf32(&mut self, vd: u32, vs: u32, sel: [u32; 4]) {
+        match sel {
+            [a, b, c, d] if a == b && b == c && c == d => self.a.dup_elem(2, vd, vs, a),
+            [0, 1, 2, 3] => {
+                if vd != vs {
+                    self.a.vmov(vd, vs);
+                }
+            }
+            [1, 0, 3, 2] => self.a.rev64_4s(vd, vs),
+            [1, 2, 3, 0] => self.a.ext16(vd, vs, vs, 4),
+            [2, 3, 0, 1] => self.a.ext16(vd, vs, vs, 8),
+            [3, 0, 1, 2] => self.a.ext16(vd, vs, vs, 12),
+            [0, 1, 0, 1] => self.a.dup_elem(3, vd, vs, 0),
+            [2, 3, 2, 3] => self.a.dup_elem(3, vd, vs, 1),
+            [0, 2, 0, 2] => self.a.vperm(1, 2, vd, vs, vs), // uzp1
+            [1, 3, 1, 3] => self.a.vperm(5, 2, vd, vs, vs), // uzp2
+            [0, 0, 2, 2] => self.a.vperm(2, 2, vd, vs, vs), // trn1
+            [1, 1, 3, 3] => self.a.vperm(6, 2, vd, vs, vs), // trn2
+            [0, 0, 1, 1] => self.a.vperm(3, 2, vd, vs, vs), // zip1
+            [2, 2, 3, 3] => self.a.vperm(7, 2, vd, vs, vs), // zip2
+            _ => {
+                // the lane value used most; if it is all but one lane: dup + ins
+                let k = *sel.iter().max_by_key(|&&x| sel.iter().filter(|&&y| y == x).count()).unwrap();
+                let odd: Vec<usize> = (0..4).filter(|&i| sel[i] != k).collect();
+                if odd.len() == 1 && vd != vs {
+                    self.a.dup_elem(2, vd, vs, k);
+                    self.a.ins_elem(2, vd, odd[0] as u32, vs, sel[odd[0]]);
+                } else {
+                    let mut idx = 0u128;
+                    for (i, &j) in sel.iter().enumerate() {
+                        for b in 0..4 {
+                            idx |= ((4 * j + b) as u128) << (8 * (4 * i as u32 + b));
+                        }
+                    }
+                    self.ldr_const(V2, idx);
+                    self.a.emit(0x4e00_0000 | (V2 << 16) | (vs << 5) | vd); // tbl vd.16b, {vs.16b}, v2.16b
+                }
+            }
+        }
+    }
+
     fn load_keep_ea(&mut self, insn: &Instruction, i: u32, rd: u32) {
         if insn.op_kind(i) == OpKind::Memory {
             let sz = insn.memory_size().size();
