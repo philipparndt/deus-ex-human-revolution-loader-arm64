@@ -95,7 +95,7 @@ Native CPU core (`build/arm64-dxcpu`):
 
 | Variable | Effect |
 | --- | --- |
-| `DXCPU_TSO=0` | turn off x86 memory ordering (on by default: `dmb ishld` after guest loads except before an address-dependent load, stores as store-release `stlr` (16-byte vectors: `dmb ishst`); stack, `[ebp-x]` locals and `[ebp+x]` after `mov ebp, esp` excepted). Faster by ~11% (measured before the stlr stores), but HR then crashes in its job system on about every other level load; `tests/guest/litmus.c` shows the reordering. `DXCPU_TSO=rcpc` uses ldapr/stlr for loads too (not faster on M-series), `DXCPU_TSO_EBP=0` keeps barriers on `[ebp±x]` |
+| `DXCPU_TSO=0` | turn off x86 memory ordering (on by default: `dmb ishld` after guest loads except before an address-dependent load, stores as store-release `stlr` (16-byte vectors: `dmb ishst`); stack, `[ebp-x]` locals and `[ebp+x]` after `mov ebp, esp` excepted). Faster by ~11% (measured before the stlr stores), but HR then crashes in its job system on about every other level load; `tests/guest/litmus.c` shows the reordering. `DXCPU_TSO=rcpc` uses ldapr/stlr for loads too (not faster on M-series), `DXCPU_TSO_EBP=0` keeps barriers on `[ebp±x]`, `DXCPU_TSO_STLR=0` stores with `dmb ishst` + `str` again |
 | `DXCPU_STATS=10` | every 10 s: dispatcher entries and the most interpreted instructions; `DXCPU_STATS_ADDR=Mnemonic` adds the addresses |
 | `DXCPU_VERIFY=1` | run every block in the interpreter as well and report blocks whose results differ (slow; shared-memory races show up as noise) |
 | `DXCPU_JIT_OFF=sse,fast,int,x87,all,m:Add+Shl` | interpret selected instruction groups (bisecting translation bugs) |

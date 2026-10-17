@@ -324,6 +324,12 @@ fn tso_ebp_local() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("DXCPU_TSO_EBP").map(|v| v != "0").unwrap_or(true))
 }
+/// DXCPU_TSO_STLR=0: with barriers (DXCPU_TSO default), stores get dmb ishst +
+/// str instead of a store-release (Translator::gst).
+fn tso_stlr() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DXCPU_TSO_STLR").map(|v| v != "0").unwrap_or(true))
+}
 /// 0 = off, 1 = ldapr/stlr (DXCPU_TSO=rcpc), 2 = dmb barriers
 pub fn tso_mode() -> u8 {
     static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
@@ -1238,6 +1244,11 @@ impl Translator {
             self.a.str_uxtw(size, rs, BASE, wm);
             return;
         }
+        if tso_mode() == 2 && !tso_stlr() {
+            self.tso_before_store();
+            self.a.str_uxtw(size, rs, BASE, wm);
+            return;
+        }
         let split = self.store_split_check(size, wm);
         self.a.add_x_uxtw(TA, BASE, wm);
         self.a.stlr(size, rs, TA);
@@ -1290,7 +1301,7 @@ impl Translator {
     /// barriers S and D go through TD as a store-release (see gst), Q keeps
     /// dmb ishst (two checked stlr cost more instructions than they save).
     fn vst(&mut self, size: u32, vs: u32, wm: u32) {
-        if !(self.tso && !self.ea_stack) || (size == 4 && tso_mode() != 1) {
+        if !(self.tso && !self.ea_stack) || (tso_mode() == 2 && (size == 4 || !tso_stlr())) {
             self.tso_before_store();
             self.a.str_v_uxtw(size, vs, BASE, wm);
             return;
