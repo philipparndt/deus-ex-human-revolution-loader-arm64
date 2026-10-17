@@ -177,3 +177,51 @@ fn carry_kept_by_inc_dec() {
         }
     }
 }
+
+/// Calls into the thunk stub range leave the engine with Exit::Stub; the host
+/// returns by popping the return address. Many round trips through the
+/// dispatcher (block cache lookups, lazy flags dropped at the stub exit).
+#[test]
+fn thunk_round_trips() {
+    const STUB: u32 = 0xFFFF_0004;
+    let code = asm(|a| {
+        let mut lp = a.create_label();
+        a.mov(esi, 50)?;
+        a.set_label(&mut lp)?;
+        a.add(eax, ebx)?;
+        a.cmp(eax, 0x10)?;
+        a.call(STUB as u64)?;
+        a.adc(ecx, eax)?;
+        a.dec(esi)?;
+        a.jne(lp)
+    });
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut results = Vec::new();
+    for jit in [false, true] {
+        let mut m = vec![0u8; MEM];
+        m[CODE as usize..CODE as usize + code.len()].copy_from_slice(&code);
+        mem::set_base(m.as_mut_ptr());
+        let mut st = state();
+        st.gpr[EBX] = 0x1234_5678;
+        let mut je = JitEngine::new(0xFFFF_0000, 0xFFFF_0010);
+        let mut ie = Engine::new(0xFFFF_0000, 0xFFFF_0010);
+        let mut trace = Vec::new();
+        let exit = loop {
+            let e = if jit { je.run(&mut st, STOP) } else { ie.run(&mut st, STOP) };
+            if e != Exit::Stub {
+                break e;
+            }
+            trace.push((st.eip, st.gpr));
+            // host: return value in eax, flags as the callee left them (CF set)
+            let top = st.gpr[ESP];
+            st.eip = mem::r32(top);
+            st.gpr[ESP] = top + 4;
+            st.gpr[EAX] = st.gpr[EAX].wrapping_mul(3);
+            st.eflags |= flags::CF;
+        };
+        mem::set_base(std::ptr::null_mut());
+        results.push((exit, st.gpr, st.eflags & flags::ARITH, trace));
+    }
+    assert_eq!(results[0].3.len(), 50);
+    assert!(results[0] == results[1], "thunk round trips differ");
+}

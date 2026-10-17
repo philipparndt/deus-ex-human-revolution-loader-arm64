@@ -255,8 +255,10 @@ fn perfmap_add(host: usize, size: usize, eip: u32) {
         std::fs::OpenOptions::new().create(true).append(true).open(path).ok().map(std::sync::Mutex::new)
     });
     if let Some(f) = f {
+        // one write call per line (writeln! on a File writes every piece separately)
+        let line = format!("{:x} {:x} g_{:08x}\n", host, size, eip);
         if let Ok(mut f) = f.lock() {
-            let _ = writeln!(f, "{:x} {:x} g_{:08x}", host, size, eip);
+            let _ = f.write_all(line.as_bytes());
         }
     }
 }
@@ -504,13 +506,21 @@ impl Jit {
 
     /// Run translated code from ctx.eip until a dispatcher exit.
     pub fn run_once(&mut self, ctx: &mut JitCtx) -> u32 {
-        let code = match self.blocks.get(&ctx.eip) {
-            Some(&c) => c,
-            None => self.translate(ctx.eip),
+        // The indirect branch cache first: returns from thunks re-enter here at
+        // a high rate and mostly hit it (HashMap lookups hash with SipHash).
+        let e = self.ibtc[ibtc_hash(ctx.eip)];
+        let code = if e.eip == ctx.eip {
+            e.code as *const u8
+        } else {
+            let code = match self.blocks.get(&ctx.eip) {
+                Some(&c) => c,
+                None => self.translate(ctx.eip),
+            };
+            if !verify_on() {
+                self.ibtc[ibtc_hash(ctx.eip)] = IbEntry { eip: ctx.eip, pad: 0, code: code as usize };
+            }
+            code
         };
-        if !verify_on() {
-            self.ibtc[ibtc_hash(ctx.eip)] = IbEntry { eip: ctx.eip, pad: 0, code: code as usize };
-        }
         ctx.ibtc = self.ibtc.as_mut_ptr();
         (self.enter)(ctx as *mut JitCtx, code)
     }
@@ -3474,6 +3484,8 @@ struct Expected {
     written: Vec<(u32, u8)>,
 }
 
+#[inline(never)]
+#[cold]
 fn verify_compare(ctx: &mut JitCtx, e: &Expected) {
     ctx.materialize();
     let st = unsafe { &*ctx.state };
@@ -3533,6 +3545,10 @@ fn verify_compare(ctx: &mut JitCtx, e: &Expected) {
 impl JitEngine {
     /// Run the block at ctx.eip in the interpreter on a copy of the state,
     /// then undo its memory writes (see verify_on).
+    // Out of line: inlined, its thread-local accesses (mem.rs undo log) and
+    // stack setup ran on every JitEngine::run, i.e. every thunk call.
+    #[inline(never)]
+    #[cold]
     fn verify_interp(&mut self, ctx: &mut JitCtx) -> Option<Expected> {
         ctx.materialize();
         let mut st = unsafe { *ctx.state };
@@ -3625,7 +3641,12 @@ impl JitEngine {
                 break unsafe { std::mem::transmute::<u32, Exit>(ctx.exit_reason) };
             }
         };
-        ctx.materialize();
+        // Exit::Stub is a call into the host (or a return to it): the arithmetic
+        // flags are not preserved across calls and no thunk reads them, so the
+        // lazy descriptor is dropped instead of materialised (once per thunk call).
+        if exit != Exit::Stub {
+            ctx.materialize();
+        }
         st.gpr = ctx.gpr;
         st.eip = ctx.eip;
         st.eflags = ctx.eflags;
