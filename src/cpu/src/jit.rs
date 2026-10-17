@@ -774,6 +774,8 @@ struct Translator {
     exit_addr: usize,
     /// (position of patchable branch word, target eip)
     exits: Vec<(usize, u32)>,
+    /// Dispatcher stubs of the direct exits (emitted by `finish`).
+    exit_stubs: Vec<(Fixup, u32)>,
     keep: Vec<Box<Instruction>>,
     /// Host NZCV currently reflects this x86 flag producer (FA/FB/FR/FC hold its operands).
     nzcv: Option<FlagSrc>,
@@ -820,6 +822,7 @@ impl Translator {
             start,
             exit_addr,
             exits: Vec::new(),
+            exit_stubs: Vec::new(),
             keep: Vec::new(),
             nzcv: None,
             dirty: false,
@@ -936,6 +939,13 @@ impl Translator {
     /// Emit the cold paths and the literal pool after the block body.
     fn finish(&mut self) {
         debug_assert!(self.seg.is_none());
+        for (f, target) in std::mem::take(&mut self.exit_stubs) {
+            self.a.bind(f);
+            self.a.mov_w_imm(T0, target);
+            self.a.str_imm(2, T0, CTX, OFF_EIP);
+            self.a.mov_w_imm(0, EXIT_DISPATCH);
+            self.b_exit();
+        }
         let colds = std::mem::take(&mut self.cold);
         for c in colds {
             self.a.bind(c.fix);
@@ -1595,8 +1605,8 @@ impl Translator {
         self.dirty = saved.1;
     }
 
-    /// Exit to a known guest eip: a patchable branch (initially to the next
-    /// instruction) followed by the slow path into the dispatcher.
+    /// Exit to a known guest eip: a patchable branch (initially to the slow
+    /// path into the dispatcher, emitted after the block body).
     fn exit_direct(&mut self, target: u32) {
         if let (Some((head, regs)), true) = (self.loop_head, target == self.block_eip) {
             // back edge of a self loop: keep the xmm cache and CF in FC (state as after the prologue)
@@ -1620,13 +1630,12 @@ impl Translator {
             return;
         }
         self.xmm_writeback();
+        // A branch to the dispatcher stub at the end of the block, patched to the
+        // target block once that is translated (the stubs stay out of the hot code).
         let pos = self.a.pos();
-        self.a.emit(0x1400_0001); // b +1 (patched to the target block later)
+        let f = self.a.b_fixup();
         self.exits.push((pos, target));
-        self.a.mov_w_imm(T0, target);
-        self.a.str_imm(2, T0, CTX, OFF_EIP);
-        self.a.mov_w_imm(0, EXIT_DISPATCH);
-        self.b_exit();
+        self.exit_stubs.push((f, target));
     }
 
     /// Exit with the guest eip in register `r`.
