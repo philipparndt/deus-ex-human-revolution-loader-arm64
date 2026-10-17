@@ -6,6 +6,7 @@
 
 #include "gmem.h"
 #include "log.h"
+#include "thunk.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -86,7 +87,31 @@ static void patch_hr_movie_due(int32_t slide) {
     LOGI("patch: HR movie frame-due test checks the playback state (%#x -> %#x)", site, c);
 }
 
+// Deus Ex: Human Revolution - Director's Cut: the job function that inflates
+// streamed resources (0x188360) runs the engine's own zlib copy (inflate at
+// 0x186430) in emulation, which keeps the worker threads busy and makes frames
+// wait in dense areas. Its entry jumps to a native version (zlib.c).
+static void patch_hr_inflate_job(int32_t slide) {
+    static const uint8_t orig[] = {0x55, 0x89, 0xE5, 0x53, 0x57, 0x56,        // push ebp; mov ebp,esp; push ebx/edi/esi
+                                   0x81, 0xEC, 0x5C, 0xA5, 0x00, 0x00};       // sub esp, 0xa55c
+    gaddr_t site = 0x188360 + (uint32_t)slide;
+    gaddr_t call = 0x1884ae + (uint32_t)slide, inflate_fn = 0x186430 + (uint32_t)slide;
+    if (!site_matches(site, orig, sizeof orig)) return;
+    // Sanity check: the job function calls the engine's inflate with flush 2.
+    const uint8_t *c = g2h(call);
+    int32_t rel;
+    memcpy(&rel, c + 1, 4);
+    if (c[0] != 0xE8 || call + 5 + (uint32_t)rel != inflate_fn) return;
+    gaddr_t native = hostsym_lookup("_dxh_hr_inflate_job");
+    if (!native) return;
+    uint8_t jmp[5];
+    put_jmp(jmp, site, native);
+    code_write(site, jmp, sizeof jmp);
+    LOGI("patch: HR resource inflate jobs run natively (%#x -> %#x)", site, native);
+}
+
 void patches_apply(struct image *exe) {
     if (getenv("DXH_NO_PATCHES")) return;
     patch_hr_movie_due(exe->slide);
+    patch_hr_inflate_job(exe->slide);
 }

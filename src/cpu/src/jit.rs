@@ -244,6 +244,23 @@ pub fn verify_on() -> bool {
     })
 }
 
+/// DXCPU_PERFMAP=<file>: append "host_start size g_<eip>" per translated block
+/// (the perf map format), so host profiles of JIT code can be mapped back to
+/// guest addresses.
+fn perfmap_add(host: usize, size: usize, eip: u32) {
+    use std::io::Write;
+    static F: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> = std::sync::OnceLock::new();
+    let f = F.get_or_init(|| {
+        let path = std::env::var_os("DXCPU_PERFMAP")?;
+        std::fs::OpenOptions::new().create(true).append(true).open(path).ok().map(std::sync::Mutex::new)
+    });
+    if let Some(f) = f {
+        if let Ok(mut f) = f.lock() {
+            let _ = writeln!(f, "{:x} {:x} g_{:08x}", host, size, eip);
+        }
+    }
+}
+
 // Translated-code tracking for invalidation: one bit per 4 KB guest page that
 // some block was translated from. The host reports code changes (mprotect to
 // executable, munmap, mmap MAP_FIXED); if they touch such a page, CODE_GEN
@@ -553,6 +570,7 @@ impl Jit {
         }
         let p = self.buf.add(&code).expect("jit buffer");
         debug_assert_eq!(p as usize, start);
+        perfmap_add(p as usize, code.len() * 4, eip);
         self.keep.extend(t.keep.drain(..));
         for (pos, target) in t.exits {
             let at = unsafe { (p as *mut u32).add(pos) };

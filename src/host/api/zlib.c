@@ -166,6 +166,40 @@ THUNK(uncompress) {
     gwrite32(ARG(1), (uint32_t)dl);
     RET(rc);
 }
+// Deus Ex: Human Revolution - Director's Cut: the engine inflates streamed
+// resources on its worker threads with its own zlib copy, which is slow when
+// emulated (Detroit stutters while the frame waits for those jobs).
+// patches.c sends the job function (0x188360) here. A job holds concatenated
+// zlib streams, each starting 16-byte aligned in the input and inflated to the
+// next 16-byte aligned output position. The original loops forever on a broken
+// stream; this stops at it.
+THUNK_AS(dxh_hr_inflate_job, "_dxh_hr_inflate_job") {
+    gaddr_t job = ARG(0);
+    gaddr_t in = gread32(job + 0xd8), out = gread32(job + 0x1d0);
+    uint32_t in_left = gread32(job + 0x4), out_left = gread32(job + 0xc);
+    for (;;) {
+        uint32_t pad = (16 - (out & 15)) & 15;
+        out += pad, out_left -= pad;
+        z_stream s;
+        memset(&s, 0, sizeof s);
+        if (inflateInit(&s) != Z_OK) break;
+        s.next_in = g2h(in), s.avail_in = in_left;
+        s.next_out = g2h(out), s.avail_out = out_left;
+        int st = inflate(&s, Z_SYNC_FLUSH);
+        in += in_left - s.avail_in, in_left = s.avail_in;
+        out += out_left - s.avail_out, out_left = s.avail_out;
+        inflateEnd(&s);
+        if (st != Z_STREAM_END) {
+            LOGE("zlib: inflate job %#x: stream ended with %d (%u bytes of input left)", job, st, in_left);
+            break;
+        }
+        pad = (16 - (in & 15)) & 15;
+        if (in_left <= pad) break; // only the alignment padding is left
+        in += pad, in_left -= pad;
+    }
+    RET(0);
+}
+
 THUNK(crc32) { RET(crc32(ARG(0), ARGP(1), ARG(2))); }
 THUNK(adler32) { RET(adler32(ARG(0), ARGP(1), ARG(2))); }
 THUNK(zlibVersion) {
