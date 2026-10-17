@@ -259,6 +259,62 @@ fn flags_across_final_branch() {
     }
 }
 
+/// Flags are not preserved across calls and returns: a flag result right
+/// before ret / call is not stored as a lazy descriptor; before a conditional
+/// branch it is (the successor may read it).
+#[test]
+fn flags_dead_at_call_and_ret() {
+    const STP_FA_FB: u32 = 0x2906_2b89; // stp w9, w10, [x28, #48]
+    let stores = |f: &dyn Fn(&mut CodeAssembler) -> Result<(), IcedError>| {
+        let code = asm(|a| f(a));
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut m = vec![0u8; MEM];
+        m[CODE as usize..CODE as usize + code.len()].copy_from_slice(&code);
+        mem::set_base(m.as_mut_ptr());
+        let (w, body) = dxcpu::jit::Jit::new(0xFFFF_0000, 0xFFFF_0010).translate_words(CODE);
+        mem::set_base(std::ptr::null_mut());
+        w[..body].iter().filter(|&&x| x == STP_FA_FB).count()
+    };
+    assert_eq!(stores(&|a| {
+        a.add(esp, 0x98)?;
+        a.pop(esi)?;
+        a.ret()
+    }), 0);
+    assert_eq!(stores(&|a| {
+        a.cmp(eax, ebx)?;
+        a.call(dword_ptr(eax + 8))
+    }), 0);
+    // live: an indirect jump may land anywhere
+    assert_eq!(stores(&|a| {
+        a.cmp(eax, ebx)?;
+        a.jmp(eax)
+    }), 1);
+    // and a normal call/return sequence still computes the same
+    let code = asm(|a| {
+        let mut f = a.create_label();
+        let mut done = a.create_label();
+        a.mov(ecx, 5)?;
+        let mut lp = a.create_label();
+        a.set_label(&mut lp)?;
+        a.call(f)?;
+        a.add(eax, ebx)?;
+        a.dec(ecx)?;
+        a.jne(lp)?;
+        a.jmp(done)?;
+        a.set_label(&mut f)?;
+        a.cmp(eax, 0x100)?;
+        a.adc(ebx, 1)?;
+        a.add(esp, 0)?;
+        a.ret()?;
+        a.set_label(&mut done)?;
+        a.cmp(eax, ebx)
+    });
+    let mut st = state();
+    st.gpr[EAX] = 0xf0;
+    st.gpr[EBX] = 7;
+    check("call/ret loop", &code, &st, &[], flags::ARITH);
+}
+
 /// Calls into the thunk stub range leave the engine with Exit::Stub; the host
 /// returns by popping the return address. Many round trips through the
 /// dispatcher (block cache lookups, lazy flags dropped at the stub exit).

@@ -686,7 +686,8 @@ fn flags_dead_from(eip: u32, mut pending: u32) -> bool {
             return true;
         }
         if insn.flow_control() != FlowControl::Next {
-            return false;
+            // not preserved across calls and returns (see flags_live_after)
+            return matches!(insn.flow_control(), FlowControl::Call | FlowControl::IndirectCall | FlowControl::Return);
         }
         ip = insn.next_ip32();
     }
@@ -715,10 +716,14 @@ fn flags_live_after(insns: &[Instruction], i: usize) -> bool {
             return false;
         }
         if insn.flow_control() != FlowControl::Next {
-            // Direct jump or call: look at the target (the callee or jump target
-            // usually sets the flags before reading any). Anything else: live.
-            let direct = matches!(insn.flow_control(), FlowControl::UnconditionalBranch | FlowControl::Call)
-                && insn.op0_kind() == OpKind::NearBranch32;
+            // Calls and returns: the arithmetic flags are not preserved across
+            // calls (x86 ABI), callee and caller set them before reading any.
+            if matches!(insn.flow_control(), FlowControl::Call | FlowControl::IndirectCall | FlowControl::Return) {
+                return false;
+            }
+            // Direct jump: look at the target (it usually sets the flags before
+            // reading any). Anything else: live.
+            let direct = insn.flow_control() == FlowControl::UnconditionalBranch && insn.op0_kind() == OpKind::NearBranch32;
             return !(direct && flags_dead_from(insn.near_branch32(), pending));
         }
     }
